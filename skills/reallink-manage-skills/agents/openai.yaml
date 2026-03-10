@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reallink Manage Skills"
+  short_description: "Shared skill ops for find, create, install, and upload"
+  default_prompt: "Use this shared skill to search the reallink-skills repository, install existing skills, create new local skills after duplicate checks, and upload local skills back to reallink-skills."
