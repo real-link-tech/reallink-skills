@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{TITLE}}</title>
+<style>
+:root{--bg:#1a1a2e;--surface:#16213e;--card:#0f3460;--text:#e4e4e4;--text-dim:#8899aa;--accent:#00d2ff;--green:#00e676;--yellow:#ffd740;--red:#ff5252;--border:#233554}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,monospace;line-height:1.5;padding:20px;max-width:1400px;margin:0 auto}
+h1{color:var(--accent);font-size:1.6em;margin-bottom:4px}
+h2{color:var(--accent);font-size:1.2em;margin:24px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+h3{color:var(--text);font-size:1em;margin:16px 0 8px}
+.subtitle{color:var(--text-dim);font-size:.85em;margin-bottom:20px}
+.banner-warn{background:#4a1c1c;border:1px solid var(--red);border-radius:6px;padding:12px 16px;margin-bottom:16px;color:var(--red);font-weight:bold}
+.banner-warn p{margin:4px 0;font-weight:normal;color:var(--text)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.card{background:var(--card);border-radius:8px;padding:14px 16px}
+.card .label{font-size:.75em;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px}
+.card .value{font-size:1.5em;font-weight:bold;margin-top:2px}
+.card .sub{font-size:.8em;color:var(--text-dim);margin-top:2px}
+.good{color:var(--green)}.warn{color:var(--yellow)}.bad{color:var(--red)}
+
+/* Memory tree */
+.tree{background:var(--surface);border-radius:8px;padding:16px;overflow-x:auto}
+.tree-controls{display:flex;gap:8px;margin-bottom:10px}
+.tree-controls button{background:var(--card);color:var(--text-dim);border:1px solid var(--border);border-radius:4px;padding:3px 10px;font-size:.75em;cursor:pointer;font-family:inherit}
+.tree-controls button:hover{color:var(--accent);border-color:var(--accent)}
+.tr{display:flex;align-items:center;height:26px;font-family:'Cascadia Code','Fira Code','Consolas',monospace;font-size:.82em;white-space:nowrap;list-style:none}
+.tr.root{font-weight:bold;font-size:.9em}
+.tn{flex-shrink:0;margin-right:8px}
+.tv{font-weight:bold;flex-shrink:0;min-width:90px;text-align:right;margin-right:4px}
+.tpct{color:var(--text-dim);flex-shrink:0;min-width:55px;font-size:.9em;margin-right:6px}
+.tbar{display:inline-block;width:100px;height:8px;background:var(--border);border-radius:3px;flex-shrink:0;margin-right:6px;position:relative;overflow:visible}
+.bf{display:block;height:100%;border-radius:3px;position:absolute;left:0;top:0}
+.bf.good{background:var(--green)}.bf.warn{background:var(--yellow)}.bf.bad{background:var(--red)}
+.bm{position:absolute;top:-2px;width:1px;height:12px;background:var(--text)}
+.td{font-size:.85em;flex-shrink:0;margin-left:2px}
+/* Collapsible tree nodes */
+.tree-node{border:none;margin:0;padding:0}
+.tree-node>.tr{cursor:pointer;padding-left:0}
+.tree-node>.tr::before{content:'\25B6';display:inline-block;width:14px;flex-shrink:0;font-size:.6em;color:var(--text-dim);transition:transform .15s ease}
+.tree-node[open]>.tr::before{transform:rotate(90deg)}
+.tree-node>.tr:hover{background:rgba(0,210,255,.06);border-radius:3px}
+.tree-node>.tr::-webkit-details-marker{display:none}
+.tree-children{padding-left:18px;border-left:1px solid var(--border);margin-left:6px}
+.tr.leaf{padding-left:14px}
+.tr.tex-section{font-weight:bold;font-size:.82em;height:26px;color:var(--accent)}
+.tr.tex-section .tv{color:var(--text)}
+.tr.tex-detail{opacity:.8;font-size:.78em;height:22px}
+.tr.tex-detail .tn{max-width:300px;overflow:hidden;text-overflow:ellipsis}
+.tr.disclaimer{height:auto;white-space:normal;opacity:0.7;font-style:italic;padding-top:4px;padding-bottom:4px}
+.tr.disclaimer .tn{max-width:none;overflow:visible;text-overflow:unset;white-space:normal}
+.tex-info{color:var(--text-dim);font-size:.85em;margin-left:8px}
+
+/* Tables */
+table{width:100%;border-collapse:collapse;margin:8px 0 16px;font-size:.85em}
+th{background:var(--surface);color:var(--accent);text-align:left;padding:8px 10px;border-bottom:2px solid var(--border)}
+td{padding:6px 10px;border-bottom:1px solid var(--border)}
+tr:hover{background:rgba(0,210,255,.05)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+
+/* Category assets */
+.top-assets details{margin:8px 0}
+.top-assets summary{cursor:pointer;padding:6px 0;font-size:.9em}
+.top-assets summary:hover{color:var(--accent)}
+.cat-total{color:var(--text-dim);font-size:.85em;font-weight:normal}
+
+/* Suggestions */
+.priority-p0{border-left:3px solid var(--red);padding-left:12px;margin:8px 0}
+.priority-p1{border-left:3px solid var(--yellow);padding-left:12px;margin:8px 0}
+.priority-p2{border-left:3px solid var(--text-dim);padding-left:12px;margin:8px 0}
+.suggestion{background:var(--surface);border-radius:6px;padding:12px;margin:8px 0}
+.suggestion .finding{margin-bottom:6px}.suggestion .action{color:var(--accent)}
+.suggestion .saving{color:var(--green);font-weight:bold}
+.suggestion .risk{color:var(--text-dim);font-style:italic}
+.tag{display:inline-block;background:var(--card);border-radius:3px;padding:1px 6px;font-size:.8em;margin:0 2px}
+.data-gap{background:var(--surface);border-radius:6px;padding:10px 14px;margin:6px 0;color:var(--text-dim)}
+footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--border);color:var(--text-dim);font-size:.75em;text-align:center}
+</style>
+</head>
+<body>
+
+{{NO_LLM_BANNER}}
+{{TEST_BUILD_BANNER}}
+
+<h1>{{TITLE}}</h1>
+<div class="subtitle">{{SUBTITLE}}</div>
+
+<h2>{{SECTION_OVERVIEW}}</h2>
+{{OVERVIEW_CARDS}}
+
+{{LLM_HEALTH_SUMMARY}}
+
+<h2>{{SECTION_TREE}}</h2>
+<div class="tree">
+<div class="tree-controls">
+<button onclick="document.querySelectorAll('.tree details').forEach(d=>d.open=true)">展开全部</button>
+<button onclick="document.querySelectorAll('.tree details').forEach(d=>d.open=false)">折叠全部</button>
+<button onclick="document.querySelectorAll('.tree details').forEach(d=>d.open=false);document.querySelectorAll('.tree > .tree-node').forEach(d=>d.open=true);document.querySelectorAll('.tree > .tree-node > .tree-children > .tree-node').forEach(d=>d.open=false)">只展开一级</button>
+</div>
+{{MEMORY_TREE}}
+</div>
+
+<h2>{{SECTION_TOP_ASSETS}}</h2>
+<div class="top-assets">{{TOP_ASSETS_TABLE}}</div>
+
+<h2>{{SECTION_SUGGESTIONS}}</h2>
+{{SUGGESTIONS_HTML}}
+
+<h2>{{SECTION_DATA_GAPS}}</h2>
+{{DATA_GAPS_HTML}}
+
+<footer>Generated by memreport-analyze skill | {{GENERATED_AT}}</footer>
+</body>
+</html>
