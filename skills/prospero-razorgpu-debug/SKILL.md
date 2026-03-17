@@ -8,7 +8,8 @@ description: >
   PS5 crash/coredump GPU analysis, prospero-razorgpu-cmd, RazorGPU, PS5 GPU profiling,
   PS5 bottleneck analysis, PS5 draw calls, PS5 GPU debugging, PS5 thread trace,
   "PS5 frame analysis", "inspect PS5 render target", "PS5 GPU stats", "PS5 GPU exception",
-  "export PS5 texture", "PS5 coredump GPU".
+  "export PS5 texture", "PS5 coredump GPU", razorgpu-cli, "PS5 per-batch bindings",
+  "PS5 marker tree", "PS5 pass timing", "PS5 resource bindings".
   DO NOT use for: PC D3D12 debugging (use PIX), Vulkan debugging (use RenderDoc),
   Xbox GPU debugging, web rendering, CSS, non-PlayStation platforms.
 ---
@@ -17,364 +18,441 @@ description: >
 
 ## Overview
 
-Razor GPU is Sony's GPU frame debugger and profiler for PS5 (Prospero). The CLI exposes
-two core operations on `.rzrgpu` / `.rtt` capture files:
+This skill enables PS5 GPU frame capture analysis, per-batch resource inspection, pass timing, and resource export using two CLI tools and the official Sony export tool.
 
 | Tool | Purpose |
 |------|---------|
-| `prospero-razorgpu-cmd.exe` | Stats dump + resource export |
+| `razorgpu-cli` | **Primary analysis tool** — marker tree with timing, per-batch resource bindings, batch descriptions, global resource inventory |
+| `RazorCmd.exe` | Sony official CLI — resource export (textures/buffers/RTs as files), trace stats dump |
 | `prospero-coredump2razorgpu.exe` | Convert PS5 crash coredump → `.rzrgpu` |
-| `image2gnf.exe` | Inspect `.gnf` headers and convert `.gnf` → PNG/BMP/DDS atlas |
-| `PS5RazorGPU.exe` | Main GUI (not CLI-scriptable) |
+| `image2gnf.exe` | Inspect/convert PS5 `.gnf` texture files |
 
-**Binary path:**
-```
-C:\Program Files (x86)\SCE\Prospero\Tools\Razor GPU\bin\CommandTools\bin\prospero-razorgpu-cmd.exe
-```
+### Tool Paths
 
-**Set an alias for convenience in PowerShell:**
-```powershell
-$rzr = "C:\Program Files (x86)\SCE\Prospero\Tools\Razor GPU\bin\CommandTools\bin\prospero-razorgpu-cmd.exe"
-$rzr2rdc = "C:\Program Files (x86)\SCE\Prospero\Tools\Razor GPU\bin\CommandTools\bin\prospero-coredump2razorgpu.exe"
-$img2gnf = "C:\Program Files (x86)\SCE\Prospero SDKs\11.000\host_tools\bin\image2gnf.exe"
-```
+```bash
+# razorgpu-cli (custom analysis tool)
+# Source: https://github.com/real-link-tech/razorgpu-cli (private)
+# Build: cd X:/PS5GPU/razorgpu-cli && dotnet build -c Release
+# Run via: dotnet run -c Release --project X:/PS5GPU/razorgpu-cli -- <args>
+# Or directly: X:/PS5GPU/razorgpu-cli/bin/Release/net8.0-windows/razorgpu-cli.exe <args>
 
-## 1. Command Reference
-
-### `--dumpstats` — Export trace statistics to JSON
-
-```powershell
-& $rzr --dumpstats -in capture.rzrgpu -out stats.json
-
-# With multiple replay traces: specify trace index
-& $rzr --dumpstats -trace=0 -in capture.rzrgpu -out stats_trace0.json
-& $rzr --dumpstats -trace=1 -in capture.rzrgpu -out stats_trace1.json
-
-# Also works with .rtt (thread-trace) files
-& $rzr --dumpstats -in capture.rtt -out stats.json
+# Sony official tools
+RAZORCMD="C:/Program Files (x86)/SCE/Prospero/Tools/Razor GPU/bin/RazorCmd.exe"
+COREDUMP2RZR="C:/Program Files (x86)/SCE/Prospero/Tools/Razor GPU/bin/CommandTools/bin/prospero-coredump2razorgpu.exe"
+IMG2GNF="C:/Program Files (x86)/SCE/Prospero SDKs/11.000/host_tools/bin/image2gnf.exe"
 ```
 
-**Arguments:**
+## 1. Frame Exploration
 
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `-in <file>` | yes | Input `.rzrgpu` or `.rtt` file |
-| `-out <file>` | yes | Output `.json` file path |
-| `-trace=<N>` | no | Index of replay trace (for multi-trace `.rzrgpu`) |
+Start with a high-level overview of the capture:
 
-### `--export` — Export GPU resources to files
-
-```powershell
-# Export all render targets
-& $rzr --export -resource=RenderTarget* -in capture.rzrgpu -out output\rendertargets\
-
-# Export a specific render target by index
-& $rzr --export -resource=RenderTarget0 -in capture.rzrgpu -out output\rt0\
-& $rzr --export -resource=RenderTarget3 -in capture.rzrgpu -out output\rt3\
-
-# Export all textures
-& $rzr --export -resource=Texture* -in capture.rzrgpu -out output\textures\
-
-# Export a specific texture
-& $rzr --export -resource=Texture7 -in capture.rzrgpu -out output\tex7\
-
-# Export all depth render targets
-& $rzr --export -resource=DepthRenderTarget* -in capture.rzrgpu -out output\depth\
-
-# Export all index buffers
-& $rzr --export -resource=IndexBuffer* -in capture.rzrgpu -out output\indices\
-
-# Export all buffers
-& $rzr --export -resource=Buffer* -in capture.rzrgpu -out output\buffers\
+```bash
+# Full analysis — marker tree, per-batch bindings, resource inventory, timing
+razorgpu-cli dump-bindings -in capture.rzrgpu -out analysis.json
 ```
 
-**Resource types:**
+This single command extracts everything. Parse the JSON to explore:
 
-| Type | Description |
-|------|-------------|
-| `RenderTarget` | Color render targets (exported as PNG/DDS) |
-| `DepthRenderTarget` | Depth/stencil buffers |
-| `Texture` | Shader-readable textures |
-| `Buffer` | Generic GPU buffers (exported as binary) |
-| `IndexBuffer` | Index buffers (exported as binary) |
+```python
+import json
+with open('analysis.json') as f:
+    d = json.load(f)
 
-Use `*` or omit the index to export all resources of a type. Use `0`, `1`, `2`… to export a specific one.
-
-**Output directory is created automatically if it does not exist.**
-
-## 2. Coredump Conversion
-
-Convert a PS5 GPU crash coredump to an inspectable `.rzrgpu` file:
-
-```powershell
-# Basic conversion
-& $rzr2rdc /o output.rzrgpu corefile.core
-
-# Capture N command buffers
-& $rzr2rdc /o output.rzrgpu /f 3 corefile.core
-
-# GPU exception only (skip non-GPU coredumps)
-& $rzr2rdc /o output.rzrgpu /g corefile.core
+# Frame overview
+print(f"Total batches: {d['batchCount']}")
+print(f"Marker trees: {len(d.get('markers', []))}")
+print(f"Resources: {list(d['resources'].keys())}")
 ```
 
-**Arguments:**
+### Navigate by marker (pass hierarchy)
 
-| Flag | Description |
-|------|-------------|
-| `/o <path>` | Output `.rzrgpu` file path |
-| `/f <count>` | Frame/command-buffer count to capture |
-| `/g` | Only convert coredumps caused by GPU exception |
-| `/h` | Show help |
+The marker tree matches the Workload Navigator in Razor GPU GUI:
 
-After conversion, inspect with `--dumpstats` and `--export` as normal.
+```python
+# Print marker tree with timing
+def print_markers(m, depth=0):
+    name = m.get('name') or '(root)'
+    dur = m.get('durationUs', 0)
+    bs, be = m.get('batchStart', 0), m.get('batchEnd', 0)
+    dur_str = f" {dur/1000:.2f}ms" if dur >= 1000 else f" {dur:.0f}us" if dur > 0 else ""
+    print(f"{'  '*depth}{name} (B{bs}-{be}){dur_str}")
+    for c in m.get('children', []):
+        print_markers(c, depth+1)
 
-## 3. Stats JSON Structure
-
-`--dumpstats` produces a JSON file. Open it and parse as follows:
-
-```powershell
-$stats = Get-Content stats.json | ConvertFrom-Json
+for m in d['markers']:
+    print_markers(m)
 ```
 
-**Top-level shape (typical):**
+### Navigate by batch
+
+```python
+# Find specific batch types
+draws = [b for b in d['batches'] if b.get('type') == 'DrawIndexed']
+dispatches = [b for b in d['batches'] if b.get('type') == 'Dispatch']
+
+# Find batches in a specific pass (by index range from markers)
+basepass = [b for b in d['batches'] if 858 <= b['index'] <= 1102]
+
+# Find batches with most textures
+by_tex = sorted(d['batches'], key=lambda b: b.get('textureCount', 0), reverse=True)
+```
+
+## 2. Per-Batch Resource Bindings
+
+Each batch in the JSON contains its resource bindings:
+
 ```json
 {
-  "TraceInfo": {
-    "FrameCount": 1,
-    "GpuDurationMs": 12.34,
-    "CaptureTimeStamp": "...",
-    "Architecture": "Prospero"
-  },
-  "DrawCallStats": [
-    {
-      "Index": 0,
-      "Name": "DrawIndexed",
-      "GpuDurationUs": 450.2,
-      "VertexCount": 36000,
-      "InstanceCount": 1
-    }
+  "globalIndex": 899,
+  "index": 899,
+  "pipeline": "Graphics",
+  "queue": "Normal",
+  "description": "drawIndexOffset [1536 indices, 0 instances]",
+  "type": "DrawIndexed",
+  "textureCount": 4,
+  "renderTargets": [
+    {"type": "RenderTarget", "name": "Render Target 0", "format": "k16_16_16_16", "width": 2720, "height": 1532}
   ],
-  "Counters": {
-    "Sum_CB_DRAWN_PIXEL": 2073600,
-    "Ratio_SQTT_INSTS_WAVE32_VALU": 0.72,
-    "Sum_GL2C_EA_RDREQ_DRAM_32B__Byte": 134217728
-  },
-  "ReplayTraces": [...]
+  "depthTarget": {"type": "DepthRenderTarget"},
+  "textures": [
+    {"type": "k2d", "name": "Texture 154", "format": "k16UInt", "width": 340, "height": 192, "descriptorIndex": 154}
+  ],
+  "buffers": [
+    {"type": "VSharp", "name": "GPUScene.InstanceSceneData", "descriptorIndex": 94},
+    {"type": "VSharp", "name": "FPositionVertexBuffer", "descriptorIndex": 412}
+  ],
+  "indexBuffer": {"type": "IndexBuffer"}
 }
 ```
 
-### Useful counter patterns
+### Query bindings for a specific batch
 
-| Counter identifier | What it means |
-|---|---|
-| `Sum_CB_DRAWN_PIXEL` | Pixels written to color buffer (overdraw indicator) |
-| `Ratio_SQTT_INSTS_WAVE32_VALU` | % of shader time in VALU (higher = shader-bound) |
-| `Ratio_SQTT_VMEM_BUS_STALL_TA_ADDR_FIFO_FULL` | % time stalled on texture/memory fetches |
-| `Sum_SQTT_WAIT_CNT_VMVS` | Shader wait counts for VMEM load/store |
-| `Sum_GL2C_EA_RDREQ_DRAM_32B__Byte` | Main memory reads via GL2$ (bytes) |
-| `Sum_GL2C_EA_WRREQ_DRAM_32B__Byte` | Main memory writes via GL2$ (bytes) |
-| `Sum_PA_PA_INPUT_PRIM` | Primitives input to PA (geometry throughput) |
-| `Sum_PA_SU_OUTPUT_PRIM` | Primitives output after setup/culling |
+```python
+batch = d['batches'][899]
+print(f"Batch {batch['index']}: {batch['description']}")
+print(f"  Type: {batch['type']}")
+print(f"  Textures: {batch.get('textureCount', 0)}")
+print(f"  RTs: {len(batch.get('renderTargets', []))}")
+print(f"  Buffers: {len(batch.get('buffers', []))}")
 
-## 4. Visual Inspection Pattern
+# Show all render targets with details
+for rt in batch.get('renderTargets', []):
+    print(f"  RT: {rt['name']} {rt.get('format')} {rt.get('width')}x{rt.get('height')}")
 
-After exporting resources, **use the Read tool** to view PNG images (the agent is multimodal):
+# Show all textures with details
+for tex in batch.get('textures', []):
+    print(f"  Tex: {tex['name']} {tex.get('format')} {tex.get('width')}x{tex.get('height')}")
 
-```powershell
-# 1. Export render targets
-& $rzr --export -resource=RenderTarget* -in capture.rzrgpu -out C:\analysis\rts\
-
-# 2. List exported files
-Get-ChildItem C:\analysis\rts\
-
-# 3. If Razor exported .gnf files, inspect one header first
-& $img2gnf -i C:\analysis\rts\render_target_5.gnf
-
-# 4. Convert ONE .gnf to a standard image in an ASCII-only output path
-#    Use a small/single file first to avoid OOM on large HDR/multi-surface RTs.
-& $img2gnf -f Atlas -i C:\analysis\rts\render_target_5.gnf -o C:\analysis_ascii\rt5.png
-
-# 5. View with Read tool (renders images visually)
-# Read tool: C:\analysis_ascii\rt5.png
+# Show all buffers with names
+for buf in batch.get('buffers', []):
+    print(f"  Buf: V#{buf['descriptorIndex']} {buf.get('name', '(unnamed)')}")
 ```
 
-Do NOT use `cat` to view images. The Read tool renders them visually.
+## 3. Resource Inventory
 
-### `.gnf` conversion notes
+Global resource summary across the entire capture:
 
-- PS5 Razor exports render targets and depth targets as `.gnf` in many captures, even when the resource is logically a color/depth surface.
-- `image2gnf.exe -i <file.gnf>` is the fastest safe way to inspect dimensions, mip count, and format before trying to convert or open the file.
-- Prefer converting **one file at a time** with `-f Atlas` when validating the workflow. Large captures can contain dozens of RTs and converting them all at once can OOM.
-- Use an **ASCII-only output path** for converted images. Writing `.png` to paths with non-ASCII characters can fail with WIC error `0x80070003`.
-- For large RTs, avoid opening the whole export directory in GUI viewers first. Probe one candidate `.gnf`, confirm conversion works, then continue selectively.
-
-## 5. Analysis Workflows
-
-### Workflow: Analyze frame performance
-
-```powershell
-$rzr = "C:\Program Files (x86)\SCE\Prospero\Tools\Razor GPU\bin\CommandTools\bin\prospero-razorgpu-cmd.exe"
-
-# Step 1: Extract stats
-& $rzr --dumpstats -in frame.rzrgpu -out analysis\stats.json
-
-# Step 2: Parse key metrics
-$stats = Get-Content analysis\stats.json | ConvertFrom-Json
-
-# GPU frame time
-$stats.TraceInfo.GpuDurationMs
-
-# Total draw calls
-$stats.DrawCallStats.Count
-
-# Top 5 most expensive draw calls
-$stats.DrawCallStats | Sort-Object GpuDurationUs -Descending | Select-Object -First 5
-
-# Memory bandwidth
-$stats.Counters.'Sum_GL2C_EA_RDREQ_DRAM_32B__Byte'
-$stats.Counters.'Sum_GL2C_EA_WRREQ_DRAM_32B__Byte'
+```python
+res = d['resources']
+print(f"Textures: {len(res.get('textures', []))}")
+print(f"Buffers (VSharp): {len(res.get('buffers', []))}")
+print(f"RenderTargets: {len(res.get('renderTargets', []))}")
+print(f"DepthTargets: {len(res.get('depthTargets', []))}")
+print(f"VideoOutBuffers: {len(res.get('videoOutBuffers', []))}")
 ```
 
-### Workflow: Inspect render targets
+### Find specific resources
 
-```powershell
+```python
+# Find largest textures
+large_tex = sorted(res['textures'], key=lambda t: t.get('size', 0), reverse=True)[:10]
+
+# Find buffers by name
+scene_bufs = [b for b in res['buffers'] if 'GPUScene' in b.get('name', '')]
+
+# Find render targets by format
+hdr_rts = [r for r in res['renderTargets'] if '16_16_16_16' in r.get('format', '')]
+```
+
+## 4. Resource Export
+
+Use Sony's `RazorCmd.exe` to export actual resource data:
+
+```bash
+# Export specific texture (by descriptor index)
+RazorCmd.exe --export -resource=Texture92 -in capture.rzrgpu -out export/
+
+# Export specific buffer
+RazorCmd.exe --export -resource=Buffer94 -in capture.rzrgpu -out export/
+
 # Export all render targets
-& $rzr --export -resource=RenderTarget* -in frame.rzrgpu -out analysis\rts\
+RazorCmd.exe --export -resource=RenderTarget* -in capture.rzrgpu -out export/rts/
 
-# Export depth buffer
-& $rzr --export -resource=DepthRenderTarget* -in frame.rzrgpu -out analysis\depth\
+# Export all depth targets
+RazorCmd.exe --export -resource=DepthRenderTarget* -in capture.rzrgpu -out export/depth/
 
-# List what was exported
-Get-ChildItem analysis\rts\ | Select-Object Name, Length
-
-# If exports are .gnf, inspect one candidate first
-& $img2gnf -i analysis\rts\render_target_5.gnf
-
-# Convert a single candidate to PNG using an ASCII-only output path
-& $img2gnf -f Atlas -i analysis\rts\render_target_5.gnf -o C:\analysis_ascii\rt5.png
-
-# View with Read tool to diagnose visual issues
+# Export all textures
+RazorCmd.exe --export -resource=Texture* -in capture.rzrgpu -out export/textures/
 ```
 
-### Workflow: Diagnose visual artifact
+### View exported resources
 
-```powershell
-# 1. Dump stats to understand the frame
-& $rzr --dumpstats -in frame.rzrgpu -out analysis\stats.json
+After exporting, **use the Read tool** to view PNG/GNF images (the agent is multimodal).
 
-# 2. Export all render targets to find which pass has the artifact
-& $rzr --export -resource=RenderTarget* -in frame.rzrgpu -out analysis\rts\
-& $rzr --export -resource=DepthRenderTarget* -in frame.rzrgpu -out analysis\depth\
-& $rzr --export -resource=Texture* -in frame.rzrgpu -out analysis\textures\
+For `.gnf` files (PS5 native texture format):
+```bash
+# Inspect GNF header
+image2gnf.exe -i export/texture_92.gnf
 
-# 3. If Razor emitted .gnf files, inspect and convert likely candidates one-by-one
-& $img2gnf -i analysis\rts\render_target_5.gnf
-& $img2gnf -f Atlas -i analysis\rts\render_target_5.gnf -o C:\analysis_ascii\rt5.png
-
-# 4. View each exported PNG with Read tool, looking for:
-#    - Unexpected black/missing regions
-#    - Incorrect colors or missing objects
-#    - Depth buffer oddities (z-fighting, incorrect depth range)
-#    - Shadow map issues
-
-# 5. Cross-reference index from the exported filename with DrawCallStats
-#    in the JSON to find the corresponding draw call
+# Convert to viewable format
+image2gnf.exe -f Atlas -i export/texture_92.gnf -o C:/analysis/tex92.png
 ```
 
-### Workflow: Multi-trace comparison
+Then use the Read tool on the PNG to view it visually.
 
-```powershell
-# For .rzrgpu files with multiple replay traces (before/after a change)
-& $rzr --dumpstats -trace=0 -in capture.rzrgpu -out analysis\stats_trace0.json
-& $rzr --dumpstats -trace=1 -in capture.rzrgpu -out analysis\stats_trace1.json
+## 5. Trace Statistics (Replay Trace Data)
 
-# Compare GPU time
-$t0 = (Get-Content analysis\stats_trace0.json | ConvertFrom-Json).TraceInfo.GpuDurationMs
-$t1 = (Get-Content analysis\stats_trace1.json | ConvertFrom-Json).TraceInfo.GpuDurationMs
-Write-Host "Trace 0: ${t0}ms  Trace 1: ${t1}ms  Delta: $([math]::Round($t1-$t0,3))ms"
+Replay traces are separate `.rzrgpu` files (e.g. `GPU_Trace_*.rzrgpu`) created by running a replay on a connected PS5. They contain per-batch shader timing, wavefronts, and VGPR counts. The capture file (`GPU_Capture_*.rzrgpu`) does NOT contain this data.
+
+```bash
+# Dump trace stats — use the TRACE file, not the capture file
+RazorCmd.exe --dumpstats -in GPU_Trace_xxx.rzrgpu -out trace_stats.json
 ```
 
-### Workflow: GPU crash coredump analysis
+```python
+stats = json.load(open('trace_stats.json'))
+freq = stats['Configuration']['ClockFrequency']
 
-```powershell
-$rzr2rdc = "C:\Program Files (x86)\SCE\Prospero\Tools\Razor GPU\bin\CommandTools\bin\prospero-coredump2razorgpu.exe"
-
-# 1. Convert the coredump (GPU exception only)
-& $rzr2rdc /o analysis\crash.rzrgpu /g crash.core
-
-# 2. Dump stats from the converted capture
-& $rzr --dumpstats -in analysis\crash.rzrgpu -out analysis\crash_stats.json
-
-# 3. Export render targets to see what was being rendered when the crash occurred
-& $rzr --export -resource=RenderTarget* -in analysis\crash.rzrgpu -out analysis\crash_rts\
-& $rzr --export -resource=DepthRenderTarget* -in analysis\crash.rzrgpu -out analysis\crash_depth\
-
-# 4. View exported images with Read tool
-# 5. Parse crash stats JSON for context (draw count, last draw name, counters)
+for pipe in stats['Pipelines']:
+    for queue in pipe['Queues']:
+        for marker in queue.get('Markers', []):
+            for batch in marker.get('Batches', []):
+                dur_us = batch['ShaderDuration'] / (freq / 1e6)
+                print(f"Batch {batch['Index']}: {dur_us:.1f}us {batch['Description']}")
+                for stage in batch.get('Stages', []):
+                    print(f"  {stage['Stage']}: {stage['Wavefronts']} waves, VGPR={stage['VgprCount']}")
 ```
 
-## 6. Performance Interpretation Guide
+## 6. Debugging Recipes
 
-### GPU time red flags
+### Recipe: Which pass is slowest?
 
-| Symptom | Likely bottleneck | Counter to check |
-|---------|------------------|-----------------|
-| High shader time | VALU/compute bound | `Ratio_SQTT_INSTS_WAVE32_VALU` |
-| Stalls on memory | Texture/buffer bandwidth | `Ratio_SQTT_VMEM_BUS_STALL_TA_ADDR_FIFO_FULL` |
-| High DRAM read bandwidth | Texture cache misses or large textures | `Sum_GL2C_EA_RDREQ_DRAM_32B__Byte` |
-| Low primitive output vs input | Heavy culling (OK) or geometry issue | `Sum_PA_SU_OUTPUT_PRIM` vs `Sum_PA_PA_INPUT_PRIM` |
-| High pixel count | Overdraw or expensive fill | `Sum_CB_DRAWN_PIXEL` |
+```bash
+razorgpu-cli dump-bindings -in capture.rzrgpu -out analysis.json
+```
+
+```python
+# Find top-level passes sorted by duration
+def get_passes(markers, depth=1):
+    results = []
+    for m in markers:
+        if m.get('durationUs', 0) > 0:
+            results.append((m['name'], m['durationUs'], m.get('batchStart'), m.get('batchEnd')))
+        if depth > 0:
+            for c in m.get('children', []):
+                results.extend(get_passes([c], depth-1))
+    return results
+
+passes = get_passes(d['markers'], depth=2)
+for name, dur, bs, be in sorted(passes, key=lambda x: x[1], reverse=True)[:10]:
+    print(f"{dur/1000:.2f}ms  {name} (B{bs}-{be})")
+```
+
+### Recipe: What resources does a specific draw use?
+
+```python
+# Find a basepass draw
+batch = d['batches'][899]
+print(json.dumps(batch, indent=2))
+
+# Then export the actual texture/buffer data for inspection
+# RazorCmd.exe --export -resource=Texture154 -in capture.rzrgpu -out export/
+```
+
+### Recipe: Find overdraw hotspots
+
+```python
+# Find batches with the most render target bindings (potential overdraw)
+multi_rt = [b for b in d['batches'] if len(b.get('renderTargets', [])) > 3]
+print(f"Batches with 4+ RTs: {len(multi_rt)}")
+
+# Find batches drawing to the same RT multiple times
+from collections import Counter
+rt_usage = Counter()
+for b in d['batches']:
+    for rt in b.get('renderTargets', []):
+        rt_usage[rt.get('name', 'unknown')] += 1
+
+for name, count in rt_usage.most_common(10):
+    print(f"  {name}: used by {count} batches")
+```
+
+### Recipe: Analyze a specific UE5 pass
+
+```python
+# Find Nanite VisBuffer pass from marker tree
+def find_marker(markers, name_contains):
+    for m in markers:
+        if name_contains.lower() in (m.get('name') or '').lower():
+            return m
+        result = find_marker(m.get('children', []), name_contains)
+        if result:
+            return result
+    return None
+
+nanite = find_marker(d['markers'], 'Nanite::VisBuffer')
+if nanite:
+    print(f"Nanite VisBuffer: {nanite['durationUs']/1000:.2f}ms (B{nanite['batchStart']}-{nanite['batchEnd']})")
+
+    # Get all batches in this pass
+    nanite_batches = [b for b in d['batches']
+                      if nanite['batchStart'] <= b['index'] <= nanite['batchEnd']]
+    print(f"  {len(nanite_batches)} batches")
+    print(f"  Types: {Counter(b.get('type') for b in nanite_batches)}")
+```
+
+### Recipe: GPU crash coredump analysis
+
+```bash
+# 1. Convert coredump
+prospero-coredump2razorgpu.exe /o crash.rzrgpu /g crash.core
+
+# 2. Analyze with razorgpu-cli
+razorgpu-cli dump-bindings -in crash.rzrgpu -out crash_analysis.json
+
+# 3. Export render targets to see last rendered state
+RazorCmd.exe --export -resource=RenderTarget* -in crash.rzrgpu -out crash_export/
+```
+
+### Recipe: Compare two captures
+
+```python
+# Load both
+with open('before.json') as f: before = json.load(f)
+with open('after.json') as f: after = json.load(f)
+
+# Compare pass timings
+def get_timing_map(data):
+    result = {}
+    def walk(markers):
+        for m in markers:
+            if m.get('name') and m.get('durationUs'):
+                result[m['name']] = m['durationUs']
+            walk(m.get('children', []))
+    walk(data.get('markers', []))
+    return result
+
+before_t = get_timing_map(before)
+after_t = get_timing_map(after)
+
+for name in sorted(set(before_t) & set(after_t), key=lambda n: abs(after_t[n] - before_t[n]), reverse=True)[:10]:
+    delta = after_t[name] - before_t[name]
+    print(f"{delta/1000:+.2f}ms  {name} ({before_t[name]/1000:.2f} -> {after_t[name]/1000:.2f}ms)")
+```
+
+## 7. Performance Interpretation
+
+### PS5 GPU time budgets
+
+| Target FPS | Frame budget | Typical breakdown |
+|-----------|-------------|-------------------|
+| 30 fps | 33.3 ms | Most PS5 titles |
+| 60 fps | 16.7 ms | Performance mode |
+| 120 fps | 8.3 ms | High-refresh mode |
+
+### Common UE5 PS5 passes and typical costs
+
+| Pass | What it does | Typical cost |
+|------|-------------|-------------|
+| Nanite::VisBuffer | Nanite mesh rasterization | 3-8ms |
+| ShadowDepths (VSM) | Virtual shadow maps | 3-8ms |
+| BasePass | Material evaluation (GBuffer fill) | 1-3ms |
+| LumenSceneLighting | Lumen GI lighting | 3-7ms |
+| TSR | Temporal Super Resolution | 5-15ms |
+| PostProcessing | Bloom, tonemapping, etc. | 1-3ms |
+| Hair | Hair rendering (Groom) | 1-3ms |
 
 ### PS5-specific notes
 
-- **AGC** (AMD GPU Custom): PS5 uses a low-level AGC API over GNMX. Draw calls appear as AGC command buffer submissions.
-- **PSSL shaders**: PlayStation Shading Language (HLSL-like). Compiled to native GCN/RDNA ISA.
-- **Wave32 vs Wave64**: PS5 GPU executes shaders in waves of 32 or 64 threads. `WAVE32` counters are the primary ones.
-- **DCC** (Delta Color Compression): PS5 uses DCC for render target compression. High DCC miss rate increases bandwidth.
-- **Thread traces (`.rtt`)**: Fine-grained per-shader timing data. Use with `--dumpstats` on `.rtt` files.
+- **AGC** (AMD GPU Custom): PS5 uses low-level AGC API over GNMX
+- **PSSL shaders**: PlayStation Shading Language (HLSL-like), compiled to RDNA2 ISA
+- **Wave32**: PS5 GPU executes shaders in 32-thread waves
+- **DCC** (Delta Color Compression): Automatic render target compression
+- **Async Compute**: Graphics and Compute queues run in parallel
+- **Nanite**: UE5's virtual geometry system, heavy on compute + rasterization
 
-## 7. Output File Formats
+## 8. Output JSON Schema
 
-| Resource type | Export format | Notes |
-|---|---|---|
-| RenderTarget | Often `.gnf` from Razor; convert to PNG/BMP/DDS with `image2gnf.exe` | Prefer single-file conversion first |
-| DepthRenderTarget | Often `.gnf` from Razor; convert with `image2gnf.exe` | Depth views may appear as grayscale or encoded masks |
-| Texture | `.gnf`, PNG, or DDS depending on capture/tool path | Format depends on texture format |
-| Buffer | Binary `.bin` | Raw GPU buffer data |
-| IndexBuffer | Binary `.bin` | Raw index data |
+### Top-level
 
-**For `.gnf` files**: Use `image2gnf.exe -i file.gnf` to inspect the header, then `image2gnf.exe -f Atlas -i file.gnf -o C:\ascii_path\file.png` to create a viewable image.
+```json
+{
+  "capture": "filename.rzrgpu",
+  "batchCount": 2999,
+  "batches": [...],
+  "resources": {...},
+  "markers": [...]
+}
+```
 
-**For DDS files**: Convert to PNG for visual inspection using `magick convert input.dds output.png` (requires ImageMagick) before using the Read tool.
+### Batch fields
 
-## 8. Error Handling
+| Field | Type | Description |
+|-------|------|-------------|
+| `globalIndex` | int | Sequential index across all queues |
+| `index` | int | Index within its queue |
+| `pipeline` | string | "Graphics" or "Compute0" etc. |
+| `queue` | string | "Normal" or "Queue1" etc. |
+| `description` | string | Command string (e.g. "drawIndexOffset [1536 indices]") |
+| `type` | string | "Draw", "DrawIndexed", "Dispatch", "Other" |
+| `textureCount` | int? | Number of textures bound |
+| `renderTargets` | ResourceInfo[]? | Bound render targets with format/dimensions |
+| `depthTarget` | ResourceInfo? | Bound depth target |
+| `indexBuffer` | ResourceInfo? | Bound index buffer |
+| `textures` | ResourceInfo[]? | Bound textures with format/dimensions |
+| `buffers` | ResourceInfo[]? | Bound buffers with names |
 
-### "File not found" on `-in`
-Verify the `.rzrgpu` path. Use tab-complete or `Get-ChildItem` to confirm.
+### Marker fields
 
-### Export produces no files
-The capture may not contain resources of that type. Try `RenderTarget*` or `Texture*` with wildcard first before specifying an index.
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Marker name (pass name) |
+| `pipeline` | string? | Pipeline name (only on root) |
+| `batchStart` | uint | First batch index |
+| `batchEnd` | uint | Last batch index |
+| `batchCount` | uint | Number of batches |
+| `durationUs` | double | Duration in microseconds |
+| `children` | MarkerData[]? | Child markers |
+
+### ResourceInfo fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Resource type |
+| `name` | string? | Resource name |
+| `format` | string? | Pixel/data format |
+| `width` | int? | Width in pixels |
+| `height` | int? | Height in pixels |
+| `depth` | int? | Depth (for 3D textures) |
+| `mips` | int? | Mip level count |
+| `size` | long? | Size in bytes |
+| `descriptorIndex` | uint? | Descriptor table index |
+| `address` | string? | GPU virtual address (hex) |
+
+## 9. Error Handling
+
+### razorgpu-cli crashes with AccessViolationException
+Some VSharp (buffer) descriptors crash when accessed in offline mode. The tool handles this gracefully — buffer names come from resource registrations instead.
+
+### "Source file contains no traces"
+The `.rzrgpu` file is a capture-only file without replay trace data. Use `razorgpu-cli dump-bindings` for marker tree and resource bindings (works without traces). For shader timing/wavefronts, you need a separate trace `.rzrgpu` file.
 
 ### Exported RTs are `.gnf`, not `.png`
-This is normal on PS5 captures. Use `image2gnf.exe -i file.gnf` to inspect the resource, then convert a single candidate with `-f Atlas` to a PNG/BMP/DDS output.
+Normal for PS5. Use `image2gnf.exe -i file.gnf` to inspect, then `-f Atlas` to convert. Use ASCII-only output paths to avoid WIC errors.
 
-### `image2gnf.exe` fails with WIC error `0x80070003`
-The output path likely contains non-ASCII characters. Retry with an ASCII-only output path such as `C:\analysis_ascii\rt5.png`.
-
-### Converting `.gnf` files OOMs
-- Do not convert the whole export directory at once
-- Start with one small `.gnf` file to validate the workflow
-- Avoid opening all RTs in GUI viewers first
-- Convert only likely candidates for the target pass
-
-### Coredump conversion fails
-- Ensure the core file is a valid PS5 coredump
-- Use `/g` flag if it's a GPU exception core specifically
-- Verify the coredump is not truncated or corrupted
-
-### Stats JSON is empty or minimal
-The capture may be a thread-trace-only `.rtt` file without draw stats. Check `TraceInfo` first; if `DrawCallStats` is absent, only counter data is available.
+### GNF conversion OOMs
+Convert one file at a time, not whole directories.
 
 ## Command Quick Reference
 
-For complete details, see [references/commands-reference.md](references/commands-reference.md).
+For `razorgpu-cli` command details, see [references/commands-reference.md](references/commands-reference.md).
