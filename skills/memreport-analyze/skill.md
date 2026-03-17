@@ -153,7 +153,47 @@ The sum of all floating items must never exceed 6,650 MB. Individual tags can bo
 
 ## Multi-report comparison mode
 
-When the user provides multiple memreport files, run parse_memreport.py on each, then compare the parsed JSONs directly. Determine comparison type from metadata (Config, CL, scene location). Output a single analysis.json covering the comparison, then render.
+When the user provides two memreport files for comparison, follow this workflow:
+
+### Step 1 — Parse both memreports
+
+Run `parse_memreport.py` on each file:
+
+```bash
+python .claude/skills/memreport-analyze/scripts/parse_memreport.py <older.memreport> -o parsed_a.json
+python .claude/skills/memreport-analyze/scripts/parse_memreport.py <newer.memreport> -o parsed_b.json
+```
+
+### Step 2 — Analyze comparison and output analysis.json
+
+Read both `*_llm.json` files. Determine comparison type from metadata (CL number, Config, scene location). Write a single `analysis.json` that covers the comparison — focus the health_summary on the delta between the two reports, and list suggestions that address regressions or continued problem areas.
+
+### Step 3 — Generate individual HTML reports (optional)
+
+If the user wants per-report detail, render each using `render_report.py` with the shared analysis.json.
+
+### Step 4 — Generate comparison HTML
+
+Run the comparison render script:
+
+```bash
+python .claude/skills/memreport-analyze/scripts/render_comparison.py <parsed_a_llm.json> <parsed_b_llm.json> -o comparison.html [--lang zh|en]
+```
+
+The first argument should be the **older** report, the second the **newer** one. The script uses `--lang zh` by default.
+
+Save the output HTML in the same directory as the memreport files.
+
+The comparison report includes:
+- **Overview cards**: OS Physical, Peak, Test-equiv, LLM Total, FMalloc metrics — side-by-side with colored deltas
+- **Budget status table**: Current/Peak target pass/fail for both CLs
+- **Top movers chart**: Tags with |delta| ≥ 5 MB, sorted by savings, with horizontal bar visualization
+- **LLM Full tag detail table**: All tags with parent/child grouping (Textures→sub-tags, Meshes→sub-tags, Physics→Chaos sub-tags, UI→sub-tags), delta values and percentages, footer rows for FMalloc Unused / Untracked / Tracked Total / Total
+- **Collapsible sections**: Texture group breakdown (NeverStream/Streaming with per-TEXTUREGROUP counts), Obj List class comparison (ResExcKB + counts), RHI category comparison
+
+### Step 5 — Clean up
+
+Remove intermediate files (parsed*.json, analysis.json) unless the user wants to keep them.
 
 ## Notes
 
