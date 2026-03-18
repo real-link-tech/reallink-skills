@@ -6,6 +6,31 @@ Source: https://github.com/real-link-tech/razorgpu-cli (private)
 
 Built with .NET 8, references Sony Razor GPU internal DLLs via reflection.
 
+### `capture` — Live GPU capture from PS5 DevKit
+
+```bash
+razorgpu-cli capture -target <ps5_ip> [-out <capture.rzrgpu>]
+```
+
+Connects to a PS5 DevKit via ProsperoTMLib COM, captures one GPU frame, and optionally auto-analyzes it.
+
+**Arguments:**
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `-target <ip>` | yes | PS5 DevKit IP address |
+| `-out <file>` | no | Output `.rzrgpu` path (default: `capture_<timestamp>.rzrgpu`) |
+
+**Output:**
+- `<file>.rzrgpu` — GPU capture (~2GB)
+- `<file>.json` — auto-generated analysis (if `-out` specified)
+
+**Requirements:**
+- PS5 DevKit on the network with a game running
+- Razor GPU SDK installed (ProsperoTMLib COM)
+
+---
+
 ### `dump-bindings` — Full capture analysis
 
 ```bash

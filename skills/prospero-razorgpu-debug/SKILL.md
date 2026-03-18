@@ -22,7 +22,7 @@ This skill enables PS5 GPU frame capture analysis, per-batch resource inspection
 
 | Tool | Purpose |
 |------|---------|
-| `razorgpu-cli` | **Primary analysis tool** — marker tree with timing, per-batch resource bindings, batch descriptions, global resource inventory |
+| `razorgpu-cli` | **Primary analysis tool** — live PS5 capture, marker tree with timing, per-batch resource bindings, batch descriptions, global resource inventory |
 | `RazorCmd.exe` | Sony official CLI — resource export (textures/buffers/RTs as files), trace stats dump |
 | `prospero-coredump2razorgpu.exe` | Convert PS5 crash coredump → `.rzrgpu` |
 | `image2gnf.exe` | Inspect/convert PS5 `.gnf` texture files |
@@ -42,9 +42,27 @@ COREDUMP2RZR="C:/Program Files (x86)/SCE/Prospero/Tools/Razor GPU/bin/CommandToo
 IMG2GNF="C:/Program Files (x86)/SCE/Prospero SDKs/11.000/host_tools/bin/image2gnf.exe"
 ```
 
-## 1. Frame Exploration
+## 1. Live Capture from PS5
 
-Start with a high-level overview of the capture:
+Connect to a PS5 DevKit, capture one GPU frame, and auto-analyze:
+
+```bash
+# Capture + analyze in one command (PS5 must have a game running)
+razorgpu-cli capture -target 192.168.104.17 -out frame.rzrgpu
+```
+
+This produces:
+- `frame.rzrgpu` — full GPU capture (~2GB)
+- `frame.json` — auto-generated analysis (marker tree + bindings + timing)
+
+Requirements:
+- PS5 DevKit connected on the network
+- A game/application running on the PS5
+- ProsperoTMLib COM (included with Razor GPU SDK)
+
+## 2. Frame Exploration
+
+Analyze an existing `.rzrgpu` capture offline:
 
 ```bash
 # Full analysis — marker tree, per-batch bindings, resource inventory, timing
@@ -97,7 +115,7 @@ basepass = [b for b in d['batches'] if 858 <= b['index'] <= 1102]
 by_tex = sorted(d['batches'], key=lambda b: b.get('textureCount', 0), reverse=True)
 ```
 
-## 2. Per-Batch Resource Bindings
+## 3. Per-Batch Resource Bindings
 
 Each batch in the JSON contains its resource bindings:
 
@@ -148,7 +166,7 @@ for buf in batch.get('buffers', []):
     print(f"  Buf: V#{buf['descriptorIndex']} {buf.get('name', '(unnamed)')}")
 ```
 
-## 3. Resource Inventory
+## 4. Resource Inventory
 
 Global resource summary across the entire capture:
 
@@ -174,7 +192,7 @@ scene_bufs = [b for b in res['buffers'] if 'GPUScene' in b.get('name', '')]
 hdr_rts = [r for r in res['renderTargets'] if '16_16_16_16' in r.get('format', '')]
 ```
 
-## 4. Resource Export
+## 5. Resource Export
 
 Use Sony's `RazorCmd.exe` to export actual resource data:
 
@@ -210,7 +228,7 @@ image2gnf.exe -f Atlas -i export/texture_92.gnf -o C:/analysis/tex92.png
 
 Then use the Read tool on the PNG to view it visually.
 
-## 5. Trace Statistics (Replay Trace Data)
+## 6. Trace Statistics (Replay Trace Data)
 
 Replay traces are separate `.rzrgpu` files (e.g. `GPU_Trace_*.rzrgpu`) created by running a replay on a connected PS5. They contain per-batch shader timing, wavefronts, and VGPR counts. The capture file (`GPU_Capture_*.rzrgpu`) does NOT contain this data.
 
@@ -233,7 +251,19 @@ for pipe in stats['Pipelines']:
                     print(f"  {stage['Stage']}: {stage['Wavefronts']} waves, VGPR={stage['VgprCount']}")
 ```
 
-## 6. Debugging Recipes
+## 7. Debugging Recipes
+
+### Recipe: Capture and analyze from PS5
+
+```bash
+# One command: capture + analyze
+razorgpu-cli capture -target 192.168.104.17 -out frame.rzrgpu
+# Produces frame.rzrgpu (~2GB) + frame.json (analysis)
+
+# Or capture first, analyze later
+razorgpu-cli capture -target 192.168.104.17 -out frame.rzrgpu
+razorgpu-cli dump-bindings -in frame.rzrgpu -out analysis.json
+```
 
 ### Recipe: Which pass is slowest?
 
@@ -350,7 +380,7 @@ for name in sorted(set(before_t) & set(after_t), key=lambda n: abs(after_t[n] - 
     print(f"{delta/1000:+.2f}ms  {name} ({before_t[name]/1000:.2f} -> {after_t[name]/1000:.2f}ms)")
 ```
 
-## 7. Performance Interpretation
+## 8. Performance Interpretation
 
 ### PS5 GPU time budgets
 
@@ -381,7 +411,7 @@ for name in sorted(set(before_t) & set(after_t), key=lambda n: abs(after_t[n] - 
 - **Async Compute**: Graphics and Compute queues run in parallel
 - **Nanite**: UE5's virtual geometry system, heavy on compute + rasterization
 
-## 8. Output JSON Schema
+## 9. Output JSON Schema
 
 ### Top-level
 
@@ -439,7 +469,7 @@ for name in sorted(set(before_t) & set(after_t), key=lambda n: abs(after_t[n] - 
 | `descriptorIndex` | uint? | Descriptor table index |
 | `address` | string? | GPU virtual address (hex) |
 
-## 9. Error Handling
+## 10. Error Handling
 
 ### razorgpu-cli crashes with AccessViolationException
 Some VSharp (buffer) descriptors crash when accessed in offline mode. The tool handles this gracefully — buffer names come from resource registrations instead.
