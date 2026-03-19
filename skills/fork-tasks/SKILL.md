@@ -94,23 +94,20 @@ tasks/
 5. **启动子会话**：为每个子任务生成 `.ps1` 启动脚本并执行。
 
 启动脚本模板：
+
+**重要**：不要在 prompt 中内联展开 context.md 和 task.md 的内容！PowerShell here-string `@"..."@` 会展开变量，将完整文件内容塞入命令行参数，极易超出长度限制导致截断。正确做法是用短 prompt 让子会话自己读取文件。
+
 ```powershell
 $taskPath = ".claude/fork-tasks/<session>/tasks/<task-id>"
-$context = Get-Content ".claude/fork-tasks/<session>/context.md" -Raw
-$task = Get-Content "$taskPath/task.md" -Raw
 Set-Content "$taskPath/status" "in_progress" -NoNewline
 
 $prompt = @"
-你正在执行一个 fork 子任务。以下是共享上下文和你的任务：
+你正在执行一个 fork 子任务。请先读取以下两个文件获取上下文和任务描述：
 
---- SHARED CONTEXT ---
-$context
+1. .claude/fork-tasks/<session>/context.md（共享上下文）
+2. .claude/fork-tasks/<session>/tasks/<task-id>/task.md（你的任务）
 
---- YOUR TASK ---
-$task
-
-任务文件位置: $taskPath
-请开始工作。完成后执行 /fork-tasks complete $taskPath
+<对任务的一句话概述>。用中文讨论。完成后执行 /fork-tasks complete $taskPath
 "@
 
 cd <project-dir>
