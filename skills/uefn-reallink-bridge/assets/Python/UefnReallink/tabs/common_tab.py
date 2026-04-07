@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from ..core.theme import theme
-from ..core.bridge import connection, uefn_execute
+from ..core.bridge import connection, uefn_cmd
 
 
 class CommonTab(ttk.Frame):
@@ -87,12 +87,11 @@ class CommonTab(ttk.Frame):
 
         def _bg():
             code = (
-                "import unreal\n"
                 "world = unreal.EditorLevelLibrary.get_editor_world()\n"
                 f"unreal.SystemLibrary.execute_console_command(world, {cmd!r})\n"
-                "result = 'ok'"
+                "result = 'ok'\n"
             )
-            resp = uefn_execute(code)
+            resp = uefn_cmd(code, activate=True)
             self.after(0, lambda: self._on_result(cmd, resp))
 
         threading.Thread(target=_bg, daemon=True).start()

@@ -450,3 +450,199 @@ for obj in unreal.ObjectIterator(unreal.StaticMesh):
 - ✓ C++ 构造函数
 - ✓ const 成员函数
 - ✓ 返回 `SIZE_T`、`void`、指针的函数
+
+---
+
+## 11. UToolMenus 逆向：UEFN 编辑器菜单系统
+
+通过 `unreal.ObjectIterator(unreal.ToolMenu)` + ctypes 内存读取，完整逆向了 UEFN 的菜单系统。
+
+### 11.1 菜单系统架构
+
+UEFN 使用三层菜单继承体系，通过 `menu_parent` 字段链接：
+
+```
+MainFrame.MainMenu              (MENU_BAR, root, style=WindowMenuBar)
+  └── LevelEditor.MainMenu      (MENU_BAR, parent=MainFrame.MainMenu)
+        └── Valkyrie.LevelEditor.MainMenu.*  (最终渲染层)
+```
+
+**Valkyrie** 是 UEFN（代号 Valkyrie）的覆盖层，替换了标准 UE5 的菜单内容。
+
+### 11.2 已发现的全部菜单路径（2382 个 UToolMenu 对象）
+
+通过 `unreal.ObjectIterator(unreal.ToolMenu)` 枚举，关键路径如下：
+
+#### 主菜单栏（MENU_BAR 类型，启动时构建一次）
+
+| 路径 | 类型 | Parent |
+|------|------|--------|
+| `MainFrame.MainMenu` | MENU_BAR | (root) |
+| `LevelEditor.MainMenu` | MENU_BAR | MainFrame.MainMenu |
+
+#### Valkyrie 覆盖层（UEFN 特有，最终渲染到 UI）
+
+| 路径 | 类型 | Parent |
+|------|------|--------|
+| `Valkyrie.LevelEditor.MainMenu.File` | MENU | LevelEditor.MainMenu.File |
+| `Valkyrie.LevelEditor.MainMenu.Edit` | MENU | LevelEditor.MainMenu.Edit |
+| `Valkyrie.LevelEditor.MainMenu.Window` | MENU | LevelEditor.MainMenu.Window |
+| `Valkyrie.LevelEditor.MainMenu.Tools` | MENU | LevelEditor.MainMenu.Tools |
+| `Valkyrie.LevelEditor.MainMenu.Help` | MENU | LevelEditor.MainMenu.Help |
+| `Valkyrie.LevelEditor.MainMenu.Build` | MENU | LevelEditor.MainMenu.Build |
+| `Valkyrie.LevelEditor.MainMenu.Select` | MENU | LevelEditor.MainMenu.Select |
+| `Valkyrie.LevelEditor.MainMenu.Verse` | MENU | LevelEditor.MainMenu.Verse |
+| `Valkyrie.LevelEditor.LevelEditorToolBar.PlayToolBar` | TOOL_BAR | LevelEditor...PlayToolBar |
+| `Valkyrie.LevelEditor.LevelEditorToolBar.AssetsToolBar` | TOOL_BAR | LevelEditor...AssetsToolBar |
+| `Valkyrie.LevelEditor.StatusBar.ToolBar` | TOOL_BAR | LevelEditor.StatusBar.ToolBar |
+
+#### 工具栏
+
+| 路径 | 类型 |
+|------|------|
+| `LevelEditor.LevelEditorToolBar` | (parent toolbar) |
+| `LevelEditor.LevelEditorToolBar.ModesToolBar` | SLIM_HORIZONTAL_TOOL_BAR |
+| `LevelEditor.LevelEditorToolBar.SettingsToolbar` | SLIM_HORIZONTAL_TOOL_BAR |
+| `LevelEditor.LevelEditorToolBar.User` | SLIM_HORIZONTAL_TOOL_BAR |
+| `LevelEditor.LevelEditorToolBar.AddQuickMenu` | MENU |
+| `LevelEditor.LevelEditorToolBar.Cinematics` | MENU |
+| `LevelEditor.SecondaryToolbar` | (secondary toolbar) |
+| `LevelEditor.StatusBar.ToolBar` | SLIM_HORIZONTAL_TOOL_BAR |
+| `ContentBrowser.ToolBar` | SLIM_WRAPPING_TOOL_BAR |
+
+#### 视口工具栏
+
+| 路径 | 类型 |
+|------|------|
+| `LevelEditor.ViewportToolBar` | (viewport toolbar) |
+| `LevelEditor.ViewportToolBar.Camera` | MENU |
+| `LevelEditor.ViewportToolBar.View` | MENU |
+| `LevelEditor.ViewportToolBar.Settings` | MENU |
+| `LevelEditor.ViewportToolBar.Show` | MENU |
+| `LevelEditor.ViewportToolBar.Snapping` | MENU |
+| `LevelEditor.ViewportToolBar.Transform` | MENU |
+| `LevelEditor.ViewportToolBar.Channels` | MENU |
+| `LevelEditor.ViewportToolBar.ViewModes` | MENU |
+
+#### 右键菜单（动态重建，运行时可热更新 ✓）
+
+| 路径 | 说明 |
+|------|------|
+| `ContentBrowser.FolderContextMenu` | CB 文件夹右键 ✓ 已验证可热更新 |
+| `ContentBrowser.AssetContextMenu` | CB 资产右键 |
+| `ContentBrowser.AddNewContextMenu` | CB "+Add" 菜单 |
+| `LevelEditor.ActorContextMenu` | 视口 Actor 右键 |
+| `LevelEditor.EmptySelectionContextMenu` | 视口空白右键 |
+| `LevelEditor.LevelEditorSceneOutliner.ContextMenu` | Outliner 右键 |
+
+### 11.3 UToolMenu 内存布局
+
+```
+UToolMenu* (继承自 UObject):
+  +0x00 ~ +0x28: UObject 标准头部
+  ...
+  +0xE8: TArray<FToolMenuSection> Sections
+         +0x00: Data* (指向 FToolMenuSection 数组)
+         +0x08: Num (int32)
+         +0x0C: Max (int32)
+```
+
+### 11.4 关键发现：菜单扩展的限制
+
+| 操作 | 数据层面 | UI 显示 | 说明 |
+|------|---------|---------|------|
+| `add_menu_entry` 到右键菜单 | ✓ | ✓ | 每次打开都重建 widget |
+| `add_menu_entry` 到主菜单子项 | ✓ | ✗ | widget 不重建 |
+| `add_sub_menu` 到 MENU_BAR | ✓ | ✗ | widget 不重建 |
+| `register_menu` 新顶级菜单 | ✓ | ✗ | widget 不重建 |
+| `refresh_all_widgets()` | - | ✗ | 不重建主菜单栏 |
+| 重启编辑器 | ✓ | ✗ | Valkyrie 覆盖层可能过滤 |
+
+**根本原因**：UEFN 的 Valkyrie 覆盖层在 widget 生成时会过滤/替换菜单内容。通过 Python `add_menu_entry` 注入的数据虽然写入了 `TArray<FToolMenuSection>`，但 Valkyrie 的 widget 生成逻辑不会渲染这些动态添加的条目。
+
+**唯一确认可工作的扩展点**：
+
+#### 右键菜单（运行时可热更新 ✓）
+
+| 路径 | 说明 | 热更新 | 启动注入 |
+|------|------|:------:|:-------:|
+| `ContentBrowser.FolderContextMenu` | CB 文件夹右键 | ✓ | ✓ |
+| `LevelEditor.EmptySelectionContextMenu` | 视口空白处右键 | ✓ | ✓ |
+| `LevelEditor.LevelEditorSceneOutliner.ContextMenu` | Outliner 面板右键 | ✓ | ✓ |
+
+#### 工具栏按钮（仅启动时注入生效，运行时热注入无效）
+
+| 路径 | 说明 | 热更新 | 启动注入 |
+|------|------|:------:|:-------:|
+| `LevelEditor.LevelEditorToolBar.User` | 关卡编辑器工具栏（Selection Mode 旁） | ✗ | ✓ |
+| `LevelEditor.ViewportToolBar` | 视口工具栏（左上角） | ✗ | ✓ |
+| `LevelEditor.StatusBar.ToolBar` | 右下角状态栏 | ✗ | ✓ |
+
+注意：工具栏按钮必须使用 `MultiBlockType.TOOL_BAR_BUTTON` 类型，且必须在编辑器启动时（通过 `register_slate_pre_tick_callback` 延迟到 Slate 首帧后）注入。运行时热注入数据写入成功但 widget 不重建。
+
+#### 以下扩展点数据注入成功但 UI 不显示（被 Valkyrie 过滤或 widget 不重建）
+
+以下扩展点数据注入成功但 UI 不显示（被 Valkyrie 过滤）：
+- 主菜单栏（`LevelEditor.MainMenu.*`、`Valkyrie.LevelEditor.MainMenu.*`）
+- Actor 右键（`LevelEditor.ActorContextMenu`）
+- 资产右键（`ContentBrowser.AssetContextMenu`）
+
+### 11.5 ToolMenus 相关的 C++ 导出符号（97 个）
+
+关键符号：
+
+```
+?AddMenuSubstitutionDuringGenerate@UToolMenus@@QEAAXVFName@@0@Z
+?RemoveSubstitutionDuringGenerate@UToolMenus@@QEAAXVFName@@@Z
+?GenerateWidget@UToolMenus@@QEAA?AV?$TSharedRef@VSWidget@@$00@@VFName@@AEBUFToolMenuContext@@@Z
+?RefreshAllWidgets@UToolMenus@@QEAAXXZ
+?RefreshMenuWidget@UToolMenus@@QEAA_NVFName@@@Z
+?RegisterMenu@UToolMenus@@QEAAPEAVUToolMenu@@VFName@@V3@W4EMultiBoxType@@_N@Z
+?ExtendMenu@UToolMenus@@QEAAPEAVUToolMenu@@VFName@@@Z
+?FindSection@UToolMenu@@QEAAPEAUFToolMenuSection@@VFName@@@Z
+?FindEntry@FToolMenuSection@@QEAAPEAUFToolMenuEntry@@VFName@@@Z
+?AddEntry@FToolMenuSection@@QEAAAEAUFToolMenuEntry@@AEBU2@@Z
+?AddSubMenu@UToolMenu@@QEAAPEAV1@UFToolMenuOwner@@VFName@@1AEBVFText@@2@Z
+?CleanupStaleWidgetsNextTick@UToolMenus@@QEAAX_N@Z
+?IsToolMenuUIEnabled@UToolMenus@@SA_NXZ
+```
+
+`AddMenuSubstitutionDuringGenerate` 是 Valkyrie 用来替换菜单的机制——它告诉 ToolMenus 在生成某个菜单的 widget 时，用另一个菜单的数据替代。
+
+### 11.6 Valkyrie 相关符号
+
+```
+?IsStructExperimentalForValkyrie@FObjectEditorUtils@@YA_NAEBVUStruct@@@Z
+?IsStructValkyrieDeprecatedForValkyrie@FObjectEditorUtils@@YA_NAEBVUStruct@@@Z
+?Z_Construct_UClass_UValkyrieMetaData_NoRegister@@YAPEAVUClass@@XZ
+```
+
+### 11.7 Python 反射可用的 UToolMenus 方法
+
+```python
+menus = unreal.ToolMenus.get()
+menus.find_menu(name)              # 查找已注册菜单
+menus.is_menu_registered(name)     # 检查菜单是否已注册
+menus.register_menu(name, parent, type, transient)  # 注册新菜单
+menus.extend_menu(name)            # 扩展已有菜单
+menus.refresh_all_widgets()        # 刷新（对主菜单无效）
+menus.refresh_menu_widget(name)    # 刷新指定菜单
+menus.add_menu_entry_object(obj)   # 通过 ToolMenuEntryScript 对象注入
+menus.remove_entry(menu, section, name)  # 移除条目
+menus.remove_menu(name)            # 移除菜单
+```
+
+### 11.8 枚举所有菜单的方法
+
+```python
+# 不要用 is_menu_registered 猜路径，直接遍历所有 UToolMenu 对象：
+all_menus = []
+for obj in unreal.ObjectIterator(unreal.ToolMenu):
+    if obj is not None:
+        all_menus.append({
+            "name": str(obj.menu_name),
+            "type": str(obj.menu_type),
+            "parent": str(obj.menu_parent),
+        })
+# 在 UEFN 5.8 中发现 2382 个 UToolMenu 对象
+```

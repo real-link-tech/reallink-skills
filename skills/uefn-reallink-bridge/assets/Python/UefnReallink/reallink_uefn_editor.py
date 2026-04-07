@@ -129,9 +129,9 @@ class ReallinkUefnEditor(tk.Tk):
 
         style.configure("Treeview", background=theme.bg_primary,
                          foreground=theme.fg_primary, fieldbackground=theme.bg_primary,
-                         font=theme.font("md"), borderwidth=0, relief=tk.FLAT)
+                         font=theme.font("md", mono=True), borderwidth=0, relief=tk.FLAT)
         style.configure("Treeview.Heading", background=theme.ctrl_bg,
-                         foreground=theme.fg_primary, font=theme.font("md", bold=True),
+                         foreground=theme.fg_primary, font=theme.font("md", bold=True, mono=True),
                          borderwidth=0, relief=tk.FLAT)
         style.map("Treeview", background=[("selected", theme.accent)])
         style.map("Treeview.Heading",

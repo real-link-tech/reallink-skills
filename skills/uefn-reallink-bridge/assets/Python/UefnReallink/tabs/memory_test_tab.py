@@ -233,7 +233,7 @@ class GridScanCanvas:
                 mb = mem / (1024 * 1024)
                 c.create_text((sx_min + sx_max) / 2, (sy_min + sy_max) / 2,
                               text=f"{mb:.0f}", fill=theme.cell_text,
-                              font=theme.font("xs") if rw < 50 else theme.font("sm"))
+                              font=theme.font("xs", mono=True) if rw < 50 else theme.font("sm", mono=True))
 
     def _on_left_click(self, e):
         g = self._grid_at(e.x, e.y)
@@ -452,7 +452,7 @@ class MemoryMapCanvas:
                            else f"X{cell.grid_x}Y{cell.grid_y}")
                     c.create_text((sx1 + sx2) / 2, (sy1 + sy2) / 2, text=lbl,
                                   fill=theme.cell_text,
-                                  font=theme.font("xs") if rw < 50 else theme.font("sm"))
+                                  font=theme.font("xs", mono=True) if rw < 50 else theme.font("sm", mono=True))
 
             self._draw_overlays()
         finally:
@@ -647,7 +647,7 @@ class StatsChart:
 
         bar_h = 16
         gap = 3
-        font = theme.font("sm")
+        font = theme.font("sm", mono=True)
         longest = max((len(rt) for rt, _ in sorted_types), default=5)
         label_w = max(longest * 7 + 10, 80)
         value_w = 180

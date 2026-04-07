@@ -156,7 +156,7 @@ class CellMapCanvas:
             if rw > 28 and rh > 14:
                 idx = f"X{cell.grid_x} Y{cell.grid_y}"
                 c.create_text((sx1 + sx2) / 2, (sy1 + sy2) / 2, text=idx, fill=theme.cell_text,
-                              font=theme.font("xs") if rw < 50 else theme.font("sm"), tags=(tag,))
+                              font=theme.font("xs", mono=True) if rw < 50 else theme.font("sm", mono=True), tags=(tag,))
 
         if self._dragging:
             dsx, dsy = self._w2s(*self._drag_start_w)

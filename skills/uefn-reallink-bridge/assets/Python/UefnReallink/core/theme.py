@@ -2,7 +2,30 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+def _pick_mono_font() -> str:
+    """Pick the best available monospace font (called lazily after tk root exists)."""
+    try:
+        import tkinter.font as tkfont
+        families = set(tkfont.families())
+        for candidate in ("Cascadia Mono", "Cascadia Code", "Consolas"):
+            if candidate in families:
+                return candidate
+    except Exception:
+        pass
+    return "Consolas"
+
+
+_mono_cache: str = ""
+
+
+def _get_mono() -> str:
+    global _mono_cache
+    if not _mono_cache:
+        _mono_cache = _pick_mono_font()
+    return _mono_cache
 
 
 @dataclass(frozen=True)
@@ -57,19 +80,21 @@ class Theme:
     drag_rect: str = ""
 
     # ── Fonts ────────────────────────────────────────────────────────────────
-    font_family: str = "Consolas"
+    font_family: str = "Segoe UI"
     font_xs: int = 7
     font_sm: int = 8
     font_md: int = 9
     font_lg: int = 10
     font_xl: int = 11
 
-    def font(self, size: str = "md", bold: bool = False) -> tuple:
+    def font(self, size: str = "md", bold: bool = False,
+             mono: bool = False) -> tuple:
         """Return a tk font tuple.  size: 'xs', 'sm', 'md', 'lg', 'xl'."""
+        family = _get_mono() if mono else self.font_family
         sz = getattr(self, f"font_{size}", self.font_md)
         if bold:
-            return (self.font_family, sz, "bold")
-        return (self.font_family, sz)
+            return (family, sz, "bold")
+        return (family, sz)
 
 
 # ─── Presets ──────────────────────────────────────────────────────────────────

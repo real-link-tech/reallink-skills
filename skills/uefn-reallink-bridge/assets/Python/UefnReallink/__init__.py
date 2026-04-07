@@ -60,7 +60,7 @@ python_dir = os.path.dirname(pkg_dir)
 subprocess.Popen(
     [py_exe, '-m', 'UefnReallink.reallink_uefn_editor'],
     cwd=python_dir,
-    creationflags=0x00000010,
+    creationflags=0x08000000,
 )
 """
 

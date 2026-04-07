@@ -80,25 +80,51 @@ def uefn_execute(code: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
+# ─── Activate UEFN Window ─────────────────────────────────────────────────────
+
+# Python snippet executed inside UEFN to bring the editor window to foreground.
+# Append to any code that modifies viewport / selection so the UI refreshes.
+_ACTIVATE_WINDOW_SNIPPET = """
+try:
+    import ctypes as _ctypes
+    _u32 = _ctypes.WinDLL("user32", use_last_error=True)
+    _hwnd = _u32.FindWindowW(None, "Unreal Editor for Fortnite")
+    if _hwnd:
+        _u32.SetForegroundWindow(_hwnd)
+except Exception:
+    pass
+"""
+
+
+def uefn_cmd(code: str, *, activate: bool = False) -> dict:
+    """Execute Python code in UEFN and optionally activate the editor window.
+
+    The code is auto-prefixed with ``import unreal``.
+    If *activate* is True the UEFN window is brought to the foreground
+    after execution so the editor UI refreshes immediately.
+    """
+    full = "import unreal\n" + code
+    if activate:
+        full += _ACTIVATE_WINDOW_SNIPPET
+    return uefn_execute(full)
+
+
 # ─── Editor Commands ──────────────────────────────────────────────────────────
 
 def select_and_focus(label: str):
-    code = f"""
-import unreal
+    return uefn_cmd(f"""
 for a in unreal.EditorLevelLibrary.get_all_level_actors():
     if a.get_name() == {label!r}:
         unreal.EditorLevelLibrary.set_selected_level_actors([a])
         unreal.EditorLevelLibrary.pilot_level_actor(a)
         break
 result = 'ok'
-"""
-    return uefn_execute(code)
+""", activate=True)
 
 
 # ─── Camera ──────────────────────────────────────────────────────────────────
 
 _CAMERA_CODE = '''
-import unreal
 loc = unreal.EditorLevelLibrary.get_level_viewport_camera_info()
 if loc:
     pos, rot = loc
@@ -110,16 +136,14 @@ else:
 
 
 def fetch_camera_info() -> dict | None:
-    resp = uefn_execute(_CAMERA_CODE)
+    resp = uefn_cmd(_CAMERA_CODE)
     if resp.get("success") and resp.get("result"):
         return resp["result"]
     return None
 
 
 def move_camera_to(x: float, y: float, z: float):
-    code = f"""
-import ctypes
-import unreal
+    return uefn_cmd(f"""
 loc = unreal.EditorLevelLibrary.get_level_viewport_camera_info()
 if loc:
     _, rot = loc
@@ -129,22 +153,13 @@ else:
     unreal.EditorLevelLibrary.set_level_viewport_camera_info(
         unreal.Vector({x}, {y}, {z}),
         unreal.Rotator(-30, 0, 0))
-try:
-    u32 = ctypes.WinDLL("user32", use_last_error=True)
-    hwnd = u32.FindWindowW(None, "Unreal Editor for Fortnite")
-    if hwnd:
-        u32.SetForegroundWindow(hwnd)
-except Exception:
-    pass
 result = 'ok'
-"""
-    return uefn_execute(code)
+""", activate=True)
 
 
 # ─── Grid Params ─────────────────────────────────────────────────────────────
 
 _GRID_PARAMS_CODE = '''
-import unreal
 world = unreal.EditorLevelLibrary.get_editor_world()
 wp = world.get_world_partition()
 rsh = wp.get_runtime_hash_set()
@@ -159,7 +174,7 @@ for g in grids:
 
 
 def fetch_grid_params_with_fallback(cells: list[Cell]) -> dict:
-    resp = uefn_execute(_GRID_PARAMS_CODE)
+    resp = uefn_cmd(_GRID_PARAMS_CODE)
     if resp.get("success") and isinstance(resp.get("result"), dict):
         gp = resp["result"]
         if gp:
@@ -211,8 +226,7 @@ def is_cell_loaded(cell: Cell, cam_x: float, cam_y: float, grid_params: dict) ->
 # ─── Asset Browser ───────────────────────────────────────────────────────────
 
 def browse_to_asset(path: str):
-    code = f"""
-import unreal
+    return uefn_cmd(f"""
 ar = unreal.AssetRegistryHelpers.get_asset_registry()
 ad = ar.get_asset_by_object_path({path!r})
 if ad.is_valid():
@@ -222,25 +236,21 @@ else:
     if obj:
         unreal.AssetToolsHelpers.get_asset_tools().sync_browser_to_objects([obj.get_path_name()])
 result = 'ok'
-"""
-    return uefn_execute(code)
+""", activate=True)
 
 
 def open_asset_editor(path: str):
-    code = f"""
-import unreal
+    return uefn_cmd(f"""
 obj = unreal.load_asset({path!r})
 if obj:
     unreal.AssetToolsHelpers.get_asset_tools().open_editor_for_assets([obj])
 result = 'ok'
-"""
-    return uefn_execute(code)
+""", activate=True)
 
 
 # ─── Trigger Dump ────────────────────────────────────────────────────────────
 
 _TRIGGER_DUMP_CODE = '''
-import unreal
 world = unreal.EditorLevelLibrary.get_editor_world()
 unreal.SystemLibrary.execute_console_command(
     world, "wp.Runtime.DumpStreamingGenerationLog")
@@ -249,7 +259,7 @@ result = "ok"
 
 
 def trigger_dump() -> dict:
-    return uefn_execute(_TRIGGER_DUMP_CODE)
+    return uefn_cmd(_TRIGGER_DUMP_CODE)
 
 
 def find_latest_log() -> str | None:
@@ -341,7 +351,6 @@ class DepCache:
 # ─── UEFN Code Templates ────────────────────────────────────────────────────
 
 _ACTOR_REFS_CODE = '''
-import unreal
 LABELS = REQUESTED_LABELS
 actors = unreal.EditorLevelLibrary.get_all_level_actors()
 amap = {}
@@ -478,7 +487,7 @@ result = entries
 
 def _fetch_actor_refs(labels: list[str]) -> dict[str, list[str]]:
     code = _ACTOR_REFS_CODE.replace("REQUESTED_LABELS", repr(set(labels)))
-    resp = uefn_execute(code)
+    resp = uefn_cmd(code)
     if resp.get("success") and isinstance(resp.get("result"), dict):
         return resp["result"]
     return {}
