@@ -1,18 +1,25 @@
-"""wp_memory_tab.py — Memory Tab: MemoryMapCanvas + MemoryTab(ttk.Frame)"""
+"""tabs/memory_test_tab.py — Memory Test Tab (原 wp_memory_tab.py)"""
 
+from __future__ import annotations
+
+import json
 import math
+import os
+import time
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from collections import deque
 
-from wp_common import (
-    BG, BG2, FG, ACCENT, GRID_LINE,
+from ..core.common import (
     ActorDesc, Cell, cell_short_label,
     heatmap_color, make_sortable, classify_resource, resource_type_color,
 )
-from wp_bridge import (
+from ..core.theme import theme
+from ..core.bridge import (
+    connection,
     fetch_camera_info, fetch_grid_params_with_fallback,
+    infer_grid_params_from_cells,
     fetch_memory_data, is_cell_loaded, move_camera_to,
     browse_to_asset, open_asset_editor, select_and_focus,
     DepCache, _resolve_all_deps,
@@ -20,12 +27,11 @@ from wp_bridge import (
     _STREAMING_TEX_CLASSES,
 )
 
-
 DEFAULT_GRID_SIZE = 50000
 _MAX_ACTOR_EXTENT = 50000
 
 
-# ─── Grid Scan Canvas ────────────────────────────────────────────────────────
+# ─── Grid Scan Canvas ─────────────────────────────────────────────────────────
 
 class GridScanCanvas:
     """Variable-size grid heatmap showing per-grid memory from a full scan."""
@@ -51,24 +57,24 @@ class GridScanCanvas:
         self._panning = False
         self._pan_last = (0, 0)
 
-        frame = tk.Frame(parent, bg=BG)
+        frame = tk.Frame(parent, bg=theme.bg_primary)
         frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        top_bar = tk.Frame(frame, bg=BG)
+        top_bar = tk.Frame(frame, bg=theme.bg_primary)
         top_bar.pack(fill=tk.X, side=tk.TOP)
-        self.coord_label = tk.Label(top_bar, text="", bg=BG, fg="#888",
-                                    font=("Consolas", 8), anchor=tk.W)
+        self.coord_label = tk.Label(top_bar, text="", bg=theme.bg_primary, fg=theme.fg_secondary,
+                                    font=theme.font("sm"), anchor=tk.W)
         self.coord_label.pack(side=tk.LEFT, padx=4)
-        fit_btn = tk.Button(top_bar, text="Fit", bg="#3c3c3c", fg="#ddd",
-                            font=("Consolas", 8), relief=tk.FLAT, padx=6, pady=1,
+        fit_btn = tk.Button(top_bar, text="Fit", bg=theme.ctrl_bg, fg=theme.fg_primary,
+                            font=theme.font("sm"), relief=tk.FLAT, padx=6, pady=1,
                             command=self.fit_view)
         fit_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.canvas = tk.Canvas(frame, bg=BG, highlightthickness=0, cursor="cross")
+        self.canvas = tk.Canvas(frame, bg=theme.bg_primary, highlightthickness=0, cursor="cross")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        self.bottom_label = tk.Label(frame, text="Click Scan All", bg=BG, fg="#888",
-                                     font=("Consolas", 8), anchor=tk.W)
+        self.bottom_label = tk.Label(frame, text="Click Scan All", bg=theme.bg_primary, fg=theme.fg_secondary,
+                                     font=theme.font("sm"), anchor=tk.W)
         self.bottom_label.pack(fill=tk.X, padx=4)
 
         self.canvas.bind("<Configure>", lambda e: self.fit_view())
@@ -132,7 +138,7 @@ class GridScanCanvas:
             text=f"Max: {self._max_memory / (1024*1024):.1f} MB | "
                  f"Avg: {avg / (1024*1024):.1f} MB | "
                  f"{len(vals)}/{self.grid_nx * self.grid_ny} grids")
-        self._redraw()
+        self.fit_view()
 
     def update_row(self, gy: int):
         self._redraw()
@@ -211,11 +217,11 @@ class GridScanCanvas:
 
             ratio = mem / max_mem
             fill = heatmap_color(ratio)
-            outline = GRID_LINE
+            outline = theme.grid_line
             width = 1
             if self.selected == (gx, gy):
-                fill = "#3a5f8a"
-                outline = "#4fc3f7"
+                fill = theme.cell_selected_fill
+                outline = theme.cell_selected_outline
                 width = 2
 
             c.create_rectangle(sx_min, sy_min, sx_max, sy_max,
@@ -226,8 +232,8 @@ class GridScanCanvas:
             if rw > 30 and rh > 14:
                 mb = mem / (1024 * 1024)
                 c.create_text((sx_min + sx_max) / 2, (sy_min + sy_max) / 2,
-                              text=f"{mb:.0f}", fill="#ccc",
-                              font=("Consolas", 7 if rw < 50 else 8))
+                              text=f"{mb:.0f}", fill=theme.cell_text,
+                              font=theme.font("xs") if rw < 50 else theme.font("sm"))
 
     def _on_left_click(self, e):
         g = self._grid_at(e.x, e.y)
@@ -283,7 +289,7 @@ class GridScanCanvas:
             self.coord_label.configure(text=f"({wx:.0f}, {wy:.0f})")
 
 
-# ─── Memory Map Canvas ───────────────────────────────────────────────────────
+# ─── Memory Map Canvas ────────────────────────────────────────────────────────
 
 class MemoryMapCanvas:
     """2D cell map showing only loaded cells, with camera arrow and capture marker."""
@@ -312,21 +318,24 @@ class MemoryMapCanvas:
 
         self._world_bounds = self._compute_world_bounds(all_cells)
 
-        frame = tk.Frame(parent, bg=BG)
+        frame = tk.Frame(parent, bg=theme.bg_primary)
         frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self.frame = frame
 
-        top_bar = tk.Frame(frame, bg=BG)
+        top_bar = tk.Frame(frame, bg=theme.bg_primary)
         top_bar.pack(fill=tk.X, side=tk.TOP)
-        self.count_label = tk.Label(top_bar, text="Loaded: 0", bg=BG, fg="#888", font=("Consolas", 8))
+        self.count_label = tk.Label(top_bar, text="Loaded: 0", bg=theme.bg_primary, fg=theme.fg_secondary,
+                                    font=theme.font("sm"))
         self.count_label.pack(side=tk.LEFT, padx=4)
-        fit_btn = tk.Button(top_bar, text="Fit", bg="#3c3c3c", fg="#ddd", font=("Consolas", 8),
-                            relief=tk.FLAT, padx=6, pady=1, command=self.fit_view)
+        fit_btn = tk.Button(top_bar, text="Fit", bg=theme.ctrl_bg, fg=theme.fg_primary,
+                            font=theme.font("sm"), relief=tk.FLAT, padx=6, pady=1,
+                            command=self.fit_view)
         fit_btn.pack(side=tk.RIGHT, padx=4)
-        self.coord_label = tk.Label(top_bar, text="", bg=BG, fg="#888", font=("Consolas", 8), anchor=tk.E)
+        self.coord_label = tk.Label(top_bar, text="", bg=theme.bg_primary, fg=theme.fg_secondary,
+                                    font=theme.font("sm"), anchor=tk.E)
         self.coord_label.pack(side=tk.RIGHT, padx=4)
 
-        self.canvas = tk.Canvas(frame, bg=BG, highlightthickness=0, cursor="cross")
+        self.canvas = tk.Canvas(frame, bg=theme.bg_primary, highlightthickness=0, cursor="cross")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         self.canvas.bind("<Configure>", lambda e: self.fit_view())
@@ -404,7 +413,8 @@ class MemoryMapCanvas:
                 self.count_label.configure(text="Loaded: 0")
                 return
 
-            max_mem = max((self.cell_memory.get(cl.short_id, 0) for cl in self.loaded_cells), default=1) or 1
+            max_mem = max((self.cell_memory.get(cl.short_id, 0)
+                          for cl in self.loaded_cells), default=1) or 1
             sel_ids = {cl.short_id for cl in self.selected_cells}
 
             def _draw_order(cl):
@@ -413,6 +423,7 @@ class MemoryMapCanvas:
                 area = w * h
                 mem = self.cell_memory.get(cl.short_id, 0)
                 return (-area, mem)
+
             for cell in sorted(self.loaded_cells, key=_draw_order):
                 x1, y1 = self._w2s(cell.cell_bounds_min[0], cell.cell_bounds_min[1])
                 x2, y2 = self._w2s(cell.cell_bounds_max[0], cell.cell_bounds_max[1])
@@ -422,23 +433,26 @@ class MemoryMapCanvas:
                 mem = self.cell_memory.get(cell.short_id, 0)
                 ratio = mem / max_mem if max_mem > 0 else 0
                 fill = heatmap_color(ratio)
-                outline = GRID_LINE
+                outline = theme.grid_line
                 width = 1
 
                 if cell.short_id in sel_ids:
-                    fill = "#3a5f8a"
-                    outline = "#4fc3f7"
+                    fill = theme.cell_selected_fill
+                    outline = theme.cell_selected_outline
                     width = 2
 
-                c.create_rectangle(sx1, sy1, sx2, sy2, fill=fill, outline=outline, width=width)
+                c.create_rectangle(sx1, sy1, sx2, sy2,
+                                   fill=fill, outline=outline, width=width)
 
                 rw = abs(sx2 - sx1)
                 rh = abs(sy2 - sy1)
                 if rw > 28 and rh > 14:
                     mb = mem / (1024 * 1024)
-                    lbl = f"{mb:.1f}MB" if mb >= 0.1 else f"X{cell.grid_x}Y{cell.grid_y}"
-                    c.create_text((sx1 + sx2) / 2, (sy1 + sy2) / 2, text=lbl, fill="#ccc",
-                                  font=("Consolas", 7 if rw < 50 else 8))
+                    lbl = (f"{mb:.1f}MB" if mb >= 0.1
+                           else f"X{cell.grid_x}Y{cell.grid_y}")
+                    c.create_text((sx1 + sx2) / 2, (sy1 + sy2) / 2, text=lbl,
+                                  fill=theme.cell_text,
+                                  font=theme.font("xs") if rw < 50 else theme.font("sm"))
 
             self._draw_overlays()
         finally:
@@ -446,8 +460,8 @@ class MemoryMapCanvas:
 
         if self._dragging:
             dsx, dsy = self._w2s(*self._drag_start_w)
-            c.create_rectangle(dsx, dsy, self._mouse_x, self._mouse_y,
-                               outline="#fff", width=1, dash=(4, 2))
+            self.canvas.create_rectangle(dsx, dsy, self._mouse_x, self._mouse_y,
+                                         outline=theme.drag_rect, width=1, dash=(4, 2))
 
         self.count_label.configure(text=f"Loaded: {len(self.loaded_cells)}")
 
@@ -463,12 +477,12 @@ class MemoryMapCanvas:
                 if lr > 0:
                     rx1, ry1 = self._w2s(cpx - lr, cpy + lr)
                     rx2, ry2 = self._w2s(cpx + lr, cpy - lr)
-                    c.create_oval(rx1, ry1, rx2, ry2, outline="#ff4444", width=1,
+                    c.create_oval(rx1, ry1, rx2, ry2, outline=theme.overlay_capture, width=1,
                                   dash=(4, 4), tags=("overlay",))
         if self.capture_pos:
             sx, sy = self._w2s(*self.capture_pos)
-            c.create_oval(sx - 6, sy - 6, sx + 6, sy + 6, fill="#ff4444", outline="#ff6666",
-                          width=1, tags=("overlay",))
+            c.create_oval(sx - 6, sy - 6, sx + 6, sy + 6, fill=theme.overlay_capture,
+                          outline=theme.overlay_capture_outline, width=1, tags=("overlay",))
         if self.cam_info:
             cam_x = self.cam_info.get("x", 0)
             cam_y = self.cam_info.get("y", 0)
@@ -484,16 +498,16 @@ class MemoryMapCanvas:
             right_x = sx + arrow_half * math.cos(rad - 2.5)
             right_y = sy + arrow_half * math.sin(rad - 2.5)
             c.create_polygon(tip_x, tip_y, left_x, left_y, right_x, right_y,
-                             fill="#dddddd", outline="#ffffff", width=1, tags=("overlay",))
+                             fill=theme.overlay_camera_fill, outline=theme.overlay_camera_outline, width=1,
+                             tags=("overlay",))
 
     def _cells_at(self, sx, sy) -> list[Cell]:
-        """Return all cells whose bounds contain the point, smallest area first."""
         wx, wy = self._s2w(sx, sy)
         hits: list[Cell] = []
         hit_area = float('inf')
         for cell in self.loaded_cells:
             if (cell.cell_bounds_min[0] <= wx <= cell.cell_bounds_max[0] and
-                cell.cell_bounds_min[1] <= wy <= cell.cell_bounds_max[1]):
+                    cell.cell_bounds_min[1] <= wy <= cell.cell_bounds_max[1]):
                 w = abs(cell.cell_bounds_max[0] - cell.cell_bounds_min[0])
                 h = abs(cell.cell_bounds_max[1] - cell.cell_bounds_min[1])
                 area = w * h
@@ -502,7 +516,7 @@ class MemoryMapCanvas:
         if hit_area < float('inf'):
             for cell in self.loaded_cells:
                 if (cell.cell_bounds_min[0] <= wx <= cell.cell_bounds_max[0] and
-                    cell.cell_bounds_min[1] <= wy <= cell.cell_bounds_max[1]):
+                        cell.cell_bounds_min[1] <= wy <= cell.cell_bounds_max[1]):
                     w = abs(cell.cell_bounds_max[0] - cell.cell_bounds_min[0])
                     h = abs(cell.cell_bounds_max[1] - cell.cell_bounds_min[1])
                     if abs(w * h - hit_area) < 1.0:
@@ -591,18 +605,17 @@ class StatsChart:
     """Canvas-drawn horizontal bar chart of resource type memory usage."""
 
     def __init__(self, parent):
-        self.frame = tk.Frame(parent, bg=BG2)
+        self.frame = tk.Frame(parent, bg=theme.bg_secondary)
         self.frame.pack(fill=tk.X, padx=4, pady=(0, 4))
 
-        self.total_label = tk.Label(self.frame, text="", bg=BG2, fg=FG,
-                                    font=("Consolas", 10, "bold"), anchor=tk.W)
+        self.total_label = tk.Label(self.frame, text="", bg=theme.bg_secondary, fg=theme.fg_primary,
+                                    font=theme.font("lg", bold=True), anchor=tk.W)
         self.total_label.pack(fill=tk.X, padx=4, pady=(2, 0))
 
-        self.canvas = tk.Canvas(self.frame, bg=BG2, highlightthickness=0, height=180)
+        self.canvas = tk.Canvas(self.frame, bg=theme.bg_secondary, highlightthickness=0, height=180)
         self.canvas.pack(fill=tk.X, padx=4)
 
     def update(self, global_assets: set[str], asset_memory: dict, asset_class: dict):
-        """Draw stats from a pre-computed global asset set."""
         type_mem: dict[str, int] = {}
         type_count: dict[str, int] = {}
         for path in global_assets:
@@ -613,7 +626,8 @@ class StatsChart:
 
         total = sum(type_mem.values())
         total_mb = total / (1024 * 1024)
-        self.total_label.configure(text=f"Breakdown: {total_mb:.1f} MB  |  {len(global_assets)} assets")
+        self.total_label.configure(
+            text=f"Breakdown: {total_mb:.1f} MB  |  {len(global_assets)} assets")
 
         MAX_BARS = 10
         all_sorted = sorted(type_mem.items(), key=lambda x: x[1], reverse=True)
@@ -633,7 +647,7 @@ class StatsChart:
 
         bar_h = 16
         gap = 3
-        font = ("Consolas", 8)
+        font = theme.font("sm")
         longest = max((len(rt) for rt, _ in sorted_types), default=5)
         label_w = max(longest * 7 + 10, 80)
         value_w = 180
@@ -652,14 +666,15 @@ class StatsChart:
             color = resource_type_color(rtype)
 
             c.create_text(label_w - 4, y + bar_h / 2, text=rtype, anchor=tk.E,
-                          fill=FG, font=font)
+                          fill=theme.fg_primary, font=font)
 
             bar_w = (mem / max_mem) * bar_area_w if max_mem > 0 else 0
-            c.create_rectangle(label_w, y, label_w + bar_w, y + bar_h, fill=color, outline="")
+            c.create_rectangle(label_w, y, label_w + bar_w, y + bar_h,
+                               fill=color, outline="")
 
             val_text = f"{mb:.1f} MB  #{cnt} ({pct:.0f}%)"
-            c.create_text(label_w + bar_w + 6, y + bar_h / 2, text=val_text, anchor=tk.W,
-                          fill="#aaa", font=font)
+            c.create_text(label_w + bar_w + 6, y + bar_h / 2, text=val_text,
+                          anchor=tk.W, fill=theme.fg_secondary, font=font)
 
             y += bar_h + gap
 
@@ -669,8 +684,8 @@ class StatsChart:
 class MemoryTab(ttk.Frame):
     """Memory analysis tab with map, stats chart, cell/actor/resource lists."""
 
-    def __init__(self, parent, actors_db: dict[str, ActorDesc], all_cells: list[Cell],
-                 project_name: str = ""):
+    def __init__(self, parent, actors_db: dict[str, ActorDesc],
+                 all_cells: list[Cell], project_name: str = ""):
         super().__init__(parent)
         self.actors_db = actors_db
         self.all_cells = all_cells
@@ -720,78 +735,92 @@ class MemoryTab(ttk.Frame):
         self._level_options = ["All"] + [str(l) for l in levels]
 
         self._build_ui()
+        connection.subscribe(self._on_connection_changed)
 
     def _build_ui(self):
-        top = tk.Frame(self, bg=BG2)
+        top = tk.Frame(self, bg=theme.bg_secondary)
         top.pack(fill=tk.X, padx=8, pady=(8, 2))
 
-        tk.Label(top, text="Level:", bg=BG2, fg=FG, font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(top, text="Level:", bg=theme.bg_secondary, fg=theme.fg_primary,
+                 font=theme.font("md")).pack(side=tk.LEFT, padx=(0, 4))
         self.level_var = tk.StringVar(value="All")
         ttk.Combobox(top, textvariable=self.level_var, values=self._level_options,
                      state="readonly", width=6).pack(side=tk.LEFT, padx=(0, 12))
         self.level_var.trace_add("write", lambda *_: self._on_level_change())
 
-        tk.Label(top, text="Grid:", bg=BG2, fg=FG, font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 2))
+        tk.Label(top, text="Grid:", bg=theme.bg_secondary, fg=theme.fg_primary,
+                 font=theme.font("md")).pack(side=tk.LEFT, padx=(0, 2))
         self._grid_size_var = tk.StringVar(value="200")
-        grid_entry = tk.Entry(top, textvariable=self._grid_size_var, bg=BG, fg=FG,
-                              insertbackground=FG, font=("Consolas", 9), width=4,
+        grid_entry = tk.Entry(top, textvariable=self._grid_size_var, bg=theme.bg_primary, fg=theme.fg_primary,
+                              insertbackground=theme.fg_primary, font=theme.font("md"), width=4,
                               relief=tk.FLAT, bd=2)
         grid_entry.pack(side=tk.LEFT, padx=(0, 1))
-        tk.Label(top, text="m", bg=BG2, fg="#888", font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Label(top, text="m", bg=theme.bg_secondary, fg=theme.fg_secondary,
+                 font=theme.font("md")).pack(side=tk.LEFT, padx=(0, 8))
 
-        self.scan_btn = tk.Button(top, text="  Scan All  ", bg="#1c3a4a", fg="#66ccff",
-                                   font=("Consolas", 9, "bold"), relief=tk.FLAT,
-                                   padx=10, pady=2, command=self._scan_all)
+        self.scan_btn = tk.Button(top, text="  Scan All  ", bg=theme.action_blue_bg, fg=theme.action_blue_fg,
+                                  font=theme.font("md", bold=True), relief=tk.FLAT,
+                                  padx=10, pady=2, command=self._scan_all)
         self.scan_btn.pack(side=tk.LEFT, padx=(0, 4))
-        tk.Button(top, text="Clear Cache", bg="#3c3c3c", fg="#ccc",
-                  font=("Consolas", 8), relief=tk.FLAT,
+        tk.Button(top, text="Clear Cache", bg=theme.ctrl_bg, fg=theme.cell_text,
+                  font=theme.font("sm"), relief=tk.FLAT,
                   padx=6, pady=2, command=self._clear_cache).pack(side=tk.LEFT, padx=(0, 8))
         self._streaming_var = tk.BooleanVar(value=True)
         tk.Checkbutton(top, text="Tex Streaming", variable=self._streaming_var,
-                       bg=BG2, fg="#8bc34a", selectcolor=BG, activebackground=BG2,
-                       activeforeground="#8bc34a", font=("Consolas", 8),
+                       bg=theme.bg_secondary, fg=theme.status_streaming, selectcolor=theme.bg_primary, activebackground=theme.bg_secondary,
+                       activeforeground=theme.status_streaming, font=theme.font("sm"),
                        command=self._on_streaming_toggle).pack(side=tk.LEFT, padx=(0, 8))
-        self.status_label = tk.Label(top, text="Click Capture to begin", bg=BG2, fg="#aaa",
-                                     font=("Consolas", 9))
+        tk.Button(top, text="Load", bg=theme.ctrl_bg, fg=theme.cell_text,
+                  font=theme.font("sm"), relief=tk.FLAT,
+                  padx=6, pady=2, command=self._load_scan).pack(side=tk.RIGHT, padx=(2, 0))
+        tk.Button(top, text="Save", bg=theme.ctrl_bg, fg=theme.cell_text,
+                  font=theme.font("sm"), relief=tk.FLAT,
+                  padx=6, pady=2, command=self._save_scan).pack(side=tk.RIGHT, padx=(2, 0))
+
+        self.status_label = tk.Label(top, text="Click Capture to begin", bg=theme.bg_secondary,
+                                     fg=theme.fg_secondary, font=theme.font("md"))
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._spinner_chars = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
         self._spinner_idx = 0
         self._spinner_after_id = None
 
-        mid = tk.PanedWindow(self, orient=tk.HORIZONTAL, bg=BG2, sashwidth=4)
+        mid = tk.PanedWindow(self, orient=tk.HORIZONTAL, bg=theme.bg_secondary, sashwidth=4)
         mid.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
-        left_frame = tk.Frame(mid, bg=BG2)
+        left_frame = tk.Frame(mid, bg=theme.bg_secondary)
         mid.add(left_frame, stretch="always")
 
-        map_pane = tk.PanedWindow(left_frame, orient=tk.HORIZONTAL, bg=BG2, sashwidth=4)
+        map_pane = tk.PanedWindow(left_frame, orient=tk.HORIZONTAL, bg=theme.bg_secondary, sashwidth=4)
         map_pane.pack(fill=tk.BOTH, expand=True)
 
-        grid_frame = tk.Frame(map_pane, bg=BG2)
+        grid_frame = tk.Frame(map_pane, bg=theme.bg_secondary)
         map_pane.add(grid_frame, stretch="always")
         self.grid_scan = GridScanCanvas(grid_frame, self.all_cells,
                                         on_click=self._on_grid_select,
                                         on_dblclick=self._on_grid_dblclick)
 
-        mem_frame = tk.Frame(map_pane, bg=BG2)
+        mem_frame = tk.Frame(map_pane, bg=theme.bg_secondary)
         map_pane.add(mem_frame, stretch="always")
-        self.mem_map = MemoryMapCanvas(mem_frame, self.all_cells, self._on_map_selection)
-        self.capture_btn = tk.Button(mem_frame, text="Capture", bg="#4a3c1c", fg="#ffd966",
-                                      font=("Consolas", 8, "bold"), relief=tk.FLAT,
-                                      padx=8, pady=2, command=self._capture)
+        self.mem_map = MemoryMapCanvas(mem_frame, self.all_cells,
+                                       self._on_map_selection)
+        self.capture_btn = tk.Button(mem_frame, text="Capture", bg=theme.action_gold_bg,
+                                     fg=theme.action_gold_fg, font=theme.font("sm", bold=True),
+                                     relief=tk.FLAT, padx=8, pady=2,
+                                     command=self._capture)
         self.capture_btn.place(relx=1.0, rely=1.0, anchor=tk.SE, x=-8, y=-8)
 
-        cell_section = tk.Frame(left_frame, bg=BG2)
+        cell_section = tk.Frame(left_frame, bg=theme.bg_secondary)
         cell_section.pack(fill=tk.X, padx=0, pady=(2, 2))
-        self.cell_list_label = tk.Label(cell_section, text="Loaded Cells", bg=BG2, fg=FG,
-                                        font=("Consolas", 9))
+        self.cell_list_label = tk.Label(cell_section, text="Loaded Cells", bg=theme.bg_secondary,
+                                        fg=theme.fg_primary, font=theme.font("md"))
         self.cell_list_label.pack(fill=tk.X, padx=4)
 
-        cell_tree_outer = tk.Frame(cell_section, bg=BG, height=120)
+        cell_tree_outer = tk.Frame(cell_section, bg=theme.bg_primary, height=120)
         cell_tree_outer.pack(fill=tk.X)
         cell_tree_outer.pack_propagate(False)
         self.cell_tree = ttk.Treeview(cell_tree_outer,
-            columns=("grid", "cell", "level", "spatial", "always", "actors", "memory_mb"),
+            columns=("grid", "cell", "level", "spatial", "always", "actors",
+                     "memory_mb"),
             show="headings", selectmode="browse")
         for col, text, w, anc in [
             ("grid", "Grid", 100, tk.W), ("cell", "Cell", 110, tk.W),
@@ -801,19 +830,21 @@ class MemoryTab(ttk.Frame):
         ]:
             self.cell_tree.heading(col, text=text)
             self.cell_tree.column(col, width=w, anchor=anc)
-        cs = ttk.Scrollbar(cell_tree_outer, orient=tk.VERTICAL, command=self.cell_tree.yview)
+        cs = ttk.Scrollbar(cell_tree_outer, orient=tk.VERTICAL,
+                           command=self.cell_tree.yview)
         self.cell_tree.configure(yscrollcommand=cs.set)
         self.cell_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         cs.pack(side=tk.RIGHT, fill=tk.Y)
         self.cell_tree.bind("<<TreeviewSelect>>", self._on_cell_select)
         make_sortable(self.cell_tree)
 
-        actor_section = tk.Frame(left_frame, bg=BG2)
+        actor_section = tk.Frame(left_frame, bg=theme.bg_secondary)
         actor_section.pack(fill=tk.BOTH, expand=True, padx=0, pady=(2, 0))
-        self.actor_label = tk.Label(actor_section, text="Actors", bg=BG2, fg=FG, font=("Consolas", 9))
+        self.actor_label = tk.Label(actor_section, text="Actors", bg=theme.bg_secondary, fg=theme.fg_primary,
+                                    font=theme.font("md"))
         self.actor_label.pack(fill=tk.X, padx=4)
 
-        actor_tree_outer = tk.Frame(actor_section, bg=BG)
+        actor_tree_outer = tk.Frame(actor_section, bg=theme.bg_primary)
         actor_tree_outer.pack(fill=tk.BOTH, expand=True)
         self.actor_tree = ttk.Treeview(actor_tree_outer,
             columns=("name", "class", "package", "memory_mb"),
@@ -824,7 +855,8 @@ class MemoryTab(ttk.Frame):
         ]:
             self.actor_tree.heading(col, text=text)
             self.actor_tree.column(col, width=w, anchor=anc)
-        ats = ttk.Scrollbar(actor_tree_outer, orient=tk.VERTICAL, command=self.actor_tree.yview)
+        ats = ttk.Scrollbar(actor_tree_outer, orient=tk.VERTICAL,
+                            command=self.actor_tree.yview)
         self.actor_tree.configure(yscrollcommand=ats.set)
         self.actor_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         ats.pack(side=tk.RIGHT, fill=tk.Y)
@@ -836,14 +868,14 @@ class MemoryTab(ttk.Frame):
         self.actor_tree.bind("<Leave>", self._on_actor_leave)
         self.actor_tree.bind("<Double-1>", self._on_actor_dblclick)
 
-        right_frame = tk.Frame(mid, bg=BG2)
+        right_frame = tk.Frame(mid, bg=theme.bg_secondary)
         mid.add(right_frame, stretch="always")
         self.stats_chart = StatsChart(right_frame)
 
-        tk.Label(right_frame, text="Resources", bg=BG2, fg=FG,
-                 font=("Consolas", 9)).pack(fill=tk.X, padx=4, pady=(0, 2))
+        tk.Label(right_frame, text="Resources", bg=theme.bg_secondary, fg=theme.fg_primary,
+                 font=theme.font("md")).pack(fill=tk.X, padx=4, pady=(0, 2))
 
-        res_tree_outer = tk.Frame(right_frame, bg=BG)
+        res_tree_outer = tk.Frame(right_frame, bg=theme.bg_primary)
         res_tree_outer.pack(fill=tk.BOTH, expand=True)
         self.res_tree = ttk.Treeview(res_tree_outer,
             columns=("path", "class", "src", "memory_mb", "ref_count"),
@@ -855,7 +887,8 @@ class MemoryTab(ttk.Frame):
         ]:
             self.res_tree.heading(col, text=text)
             self.res_tree.column(col, width=w, anchor=anc)
-        rss = ttk.Scrollbar(res_tree_outer, orient=tk.VERTICAL, command=self.res_tree.yview)
+        rss = ttk.Scrollbar(res_tree_outer, orient=tk.VERTICAL,
+                            command=self.res_tree.yview)
         self.res_tree.configure(yscrollcommand=rss.set)
         self.res_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         rss.pack(side=tk.RIGHT, fill=tk.Y)
@@ -870,14 +903,84 @@ class MemoryTab(ttk.Frame):
         self.res_tree.bind("<Button-3>", self._on_res_rightclick)
         self._res_actor_map: dict[str, list[str]] = {}
 
-        self.total_label = tk.Label(right_frame, text="", bg=BG2, fg="#aaa",
-                                    font=("Consolas", 9), anchor=tk.E)
+        self.total_label = tk.Label(right_frame, text="", bg=theme.bg_secondary, fg=theme.fg_secondary,
+                                    font=theme.font("md"), anchor=tk.E)
         self.total_label.pack(fill=tk.X, padx=4, pady=(2, 0))
 
-    # ── Camera Polling ────────────────────────────────────────────────────────
+    # ── Connection state ─────────────────────────────────────────────────────
+
+    def _on_connection_changed(self, connected: bool):
+        self.after(0, lambda: self._apply_connection_state(connected))
+
+    def _apply_connection_state(self, connected: bool):
+        if connected:
+            self.capture_btn.configure(state=tk.NORMAL, bg=theme.action_gold_bg, fg=theme.action_gold_fg)
+        else:
+            self.capture_btn.configure(state=tk.DISABLED, bg=theme.bg_tertiary, fg=theme.fg_secondary)
+            if self._polling:
+                self.stop_polling()
+
+    # ── Reload Data ──────────────────────────────────────────────────────────
+
+    def reload(self, actors_db, cells, project_name):
+        self.actors_db = actors_db
+        self.all_cells = cells
+        self._cell_map_dict = {c.short_id: c for c in cells}
+        self.cache = DepCache(project_name)
+
+        self._actor_db_by_name.clear()
+        for ad in actors_db.values():
+            if ad.name:
+                self._actor_db_by_name[ad.name] = ad
+            if ad.label and ad.label != ad.name:
+                self._actor_db_by_name[ad.label] = ad
+
+        self.actor_refs.clear()
+        self._dep_graph.clear()
+        self._asset_memory.clear()
+        self._asset_class.clear()
+        self._tex_info.clear()
+        self._actor_bounds.clear()
+        self.actor_resolved.clear()
+        self.actor_memory.clear()
+        self.cell_assets.clear()
+        self.cell_memory.clear()
+        self.global_assets.clear()
+        self._streaming_adjusted.clear()
+        self._scan_actor_refs.clear()
+        self._scan_actor_resolved.clear()
+        self._scan_cell_assets.clear()
+        self._scan_asset_memory.clear()
+        self._scan_asset_class.clear()
+        self._scan_tex_info.clear()
+        self._scan_actor_bounds.clear()
+        self._scan_asset_to_actors.clear()
+        self._grid_memory.clear()
+        self._grid_cells.clear()
+
+        self.grid_scan._world_bounds = GridScanCanvas._compute_world_bounds(cells)
+        self.grid_scan._recompute_grid()
+        self.grid_scan.grid_memory.clear()
+        self.grid_scan.selected = None
+        self.grid_scan._redraw()
+
+        self.mem_map.all_cells = cells
+        self.mem_map._world_bounds = self.mem_map._compute_world_bounds(cells)
+        self.mem_map.loaded_cells = []
+        self.mem_map.cell_memory.clear()
+        self.mem_map.fit_view()
+
+        self.cell_tree.delete(*self.cell_tree.get_children())
+        self.actor_tree.delete(*self.actor_tree.get_children())
+        self.res_tree.delete(*self.res_tree.get_children())
+
+        self.status_label.configure(
+            text="Data refreshed — click Scan All or Capture", fg=theme.status_ok)
+
+    # ── Camera Polling ───────────────────────────────────────────────────────
 
     def start_polling(self):
-        if self._polling:
+        if self._polling or not connection.connected:
             return
         self._polling = True
         self._poll_in_flight = False
@@ -889,8 +992,12 @@ class MemoryTab(ttk.Frame):
     def _poll_camera(self):
         if not self._polling:
             return
+        if not connection.connected:
+            self._polling = False
+            return
         if not self._poll_in_flight:
             self._poll_in_flight = True
+
             def _bg():
                 cam = fetch_camera_info()
                 try:
@@ -905,18 +1012,18 @@ class MemoryTab(ttk.Frame):
         if cam:
             self.mem_map.update_camera(cam)
 
-    # ── Capture ───────────────────────────────────────────────────────────────
+    # ── Capture ──────────────────────────────────────────────────────────────
 
-    def _set_busy(self, busy: bool, status_text: str = "", status_fg: str = "#aaa"):
+    def _set_busy(self, busy: bool, status_text: str = "", status_fg: str = theme.fg_secondary):
         self._busy = busy
         if busy:
-            self.capture_btn.configure(state=tk.DISABLED, bg="#333", fg="#888")
-            self.scan_btn.configure(state=tk.DISABLED, bg="#333", fg="#888")
+            self.capture_btn.configure(state=tk.DISABLED, bg=theme.bg_tertiary, fg=theme.fg_secondary)
+            self.scan_btn.configure(state=tk.DISABLED, bg=theme.bg_tertiary, fg=theme.fg_secondary)
             self._start_spinner()
         else:
             self._stop_spinner()
-            self.capture_btn.configure(state=tk.NORMAL, bg="#4a3c1c", fg="#ffd966")
-            self.scan_btn.configure(state=tk.NORMAL, bg="#1c3a4a", fg="#66ccff")
+            self.capture_btn.configure(state=tk.NORMAL, bg=theme.action_gold_bg, fg=theme.action_gold_fg)
+            self.scan_btn.configure(state=tk.NORMAL, bg=theme.action_blue_bg, fg=theme.action_blue_fg)
         if status_text:
             self.status_label.configure(text=status_text, fg=status_fg)
         self.update_idletasks()
@@ -941,9 +1048,123 @@ class MemoryTab(ttk.Frame):
     def _clear_cache(self):
         self.cache.entries.clear()
         self.cache.save()
-        self.status_label.configure(text="Cache cleared", fg="#ffd966")
+        self.status_label.configure(text="Cache cleared", fg=theme.action_gold_fg)
 
-    # ── Scan All ──────────────────────────────────────────────────────────────
+    # ── Save / Load Scan Data ────────────────────────────────────────────────
+
+    def _save_scan(self):
+        if not self._grid_memory:
+            self.status_label.configure(
+                text="Nothing to save — run Scan All first", fg=theme.status_error)
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save Scan Data",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+
+        def _set_to_list(s):
+            return sorted(s) if isinstance(s, set) else s
+
+        data = {
+            "version": 2,
+            "grid_size": self.grid_scan.grid_size,
+            "grid_params": self.grid_params,
+            "grid_memory": {f"{k[0]},{k[1]}": v
+                            for k, v in self._grid_memory.items()},
+            "scan_actor_resolved": {k: _set_to_list(v)
+                                    for k, v in self._scan_actor_resolved.items()},
+            "scan_cell_assets": {k: _set_to_list(v)
+                                 for k, v in self._scan_cell_assets.items()},
+            "scan_asset_memory": self._scan_asset_memory,
+            "scan_asset_class": self._scan_asset_class,
+            "scan_tex_info": self._scan_tex_info,
+            "dep_cache": self.cache.entries,
+        }
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, separators=(",", ":"))
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+            self.status_label.configure(
+                text=f"Saved scan data ({size_mb:.1f} MB) → {os.path.basename(path)}",
+                fg=theme.status_ok)
+        except Exception as e:
+            self.status_label.configure(text=f"Save failed: {e}", fg=theme.status_error)
+
+    def _load_scan(self):
+        if self._busy:
+            return
+        path = filedialog.askopenfilename(
+            title="Load Scan Data",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+
+        self.status_label.configure(text="Loading scan data...", fg=theme.action_blue_fg)
+        self.update_idletasks()
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            self.status_label.configure(text=f"Load failed: {e}", fg=theme.status_error)
+            return
+
+        version = data.get("version", 1)
+        if version < 2:
+            self.status_label.configure(
+                text="Incompatible file format (version < 2)", fg=theme.status_error)
+            return
+
+        grid_size = data.get("grid_size", 20000)
+        self.grid_params = data.get("grid_params", {})
+        self.mem_map.grid_params = self.grid_params
+
+        self._scan_actor_resolved = {
+            k: set(v) for k, v in data.get("scan_actor_resolved", {}).items()}
+        self._scan_cell_assets = {
+            k: set(v) for k, v in data.get("scan_cell_assets", {}).items()}
+        self._scan_asset_memory = data.get("scan_asset_memory", {})
+        self._scan_asset_class = data.get("scan_asset_class", {})
+        self._scan_tex_info = data.get("scan_tex_info", {})
+        self._scan_actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
+        self._scan_asset_to_actors = build_asset_to_actors(
+            self._scan_actor_resolved)
+        self._scan_actor_refs = {}
+
+        dep_cache = data.get("dep_cache", {})
+        if dep_cache:
+            self.cache.entries.update(dep_cache)
+
+        grid_memory_raw = data.get("grid_memory", {})
+        grid_memory: dict[tuple[int, int], float] = {}
+        for k, v in grid_memory_raw.items():
+            parts = k.split(",")
+            if len(parts) == 2:
+                grid_memory[(int(parts[0]), int(parts[1]))] = v
+        self._grid_memory = grid_memory
+
+        self._grid_cells = {}
+        gp = self.grid_params
+        self.grid_scan.set_grid_size(grid_size)
+        for (gx, gy) in grid_memory:
+            cx, cy = self.grid_scan.grid_center(gx, gy)
+            self._grid_cells[(gx, gy)] = [
+                c for c in self.all_cells if is_cell_loaded(c, cx, cy, gp)]
+
+        self.grid_scan.set_grid_data(grid_memory)
+
+        vals = [v / (1024 * 1024) for v in grid_memory.values() if v > 0]
+        max_mb = max(vals) if vals else 0
+        avg_mb = (sum(vals) / len(vals)) if vals else 0
+        self.status_label.configure(
+            text=f"\u2714 Loaded: max {max_mb:.1f} MB, avg {avg_mb:.1f} MB, "
+                 f"{len(grid_memory)} grids | {os.path.basename(path)}",
+            fg=theme.status_ok)
+
+    # ── Scan All ─────────────────────────────────────────────────────────────
 
     def _scan_all(self):
         if self._busy:
@@ -953,12 +1174,74 @@ class MemoryTab(ttk.Frame):
         except ValueError:
             meters = 200
         self.grid_scan.set_grid_size(max(50, meters) * 100)
-        self._set_busy(True, "[Scan 1/4] Fetching grid params...", "#66ccff")
+
+        if not connection.connected:
+            self._scan_all_offline()
+            return
+
+        self._set_busy(True, "[Scan 1/4] Fetching grid params...", theme.action_blue_fg)
 
         def _bg_phase1():
             gp = fetch_grid_params_with_fallback(self.all_cells)
             self.after(0, lambda: self._scan_phase2(gp))
         threading.Thread(target=_bg_phase1, daemon=True).start()
+
+    def _scan_all_offline(self):
+        gp = infer_grid_params_from_cells(self.all_cells)
+        self.grid_params = gp
+        self.mem_map.grid_params = gp
+
+        if not self.cache.entries:
+            self._set_busy(False,
+                "[Offline] No dep cache found — run online Scan All first to build cache",
+                theme.status_error)
+            return
+
+        self._set_busy(True, "[Offline Scan 1/2] Resolving from cache...", theme.action_blue_fg)
+        self.update_idletasks()
+
+        t0 = time.perf_counter()
+
+        dep_graph = self.cache.build_dep_graph()
+        asset_memory = self.cache.build_asset_memory()
+        asset_class = self.cache.build_asset_class()
+        tex_info = self.cache.build_tex_info()
+        self._scan_asset_memory = asset_memory
+        self._scan_asset_class = asset_class
+        self._scan_tex_info = tex_info
+        self._scan_actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
+
+        all_labels = set()
+        for cell in self.all_cells:
+            for ca in cell.actors:
+                all_labels.add(ca.label)
+
+        scan_actor_resolved: dict[str, set[str]] = {}
+        for label in all_labels:
+            scan_actor_resolved[label] = set()
+
+        cell_assets_map: dict[str, set[str]] = {}
+        for cell in self.all_cells:
+            merged: set[str] = set()
+            for ca in cell.actors:
+                if ca.package and ca.package in dep_graph:
+                    resolved = _resolve_all_deps(
+                        dep_graph.get(ca.package, []) + [ca.package],
+                        dep_graph, asset_class)
+                    scan_actor_resolved[ca.label] = resolved
+                    merged |= resolved
+            cell_assets_map[cell.short_id] = merged
+
+        self._scan_actor_resolved = scan_actor_resolved
+        self._scan_cell_assets = cell_assets_map
+        self._scan_actor_refs = {}
+        self._scan_asset_to_actors = build_asset_to_actors(scan_actor_resolved)
+
+        t1 = time.perf_counter()
+        print(f"[offline scan] Resolve from cache: {(t1-t0)*1000:.0f}ms, "
+              f"{len(scan_actor_resolved)} actors, {len(cell_assets_map)} cells")
+
+        self._scan_phase4()
 
     def _scan_phase2(self, gp: dict):
         self.grid_params = gp
@@ -971,8 +1254,9 @@ class MemoryTab(ttk.Frame):
 
         cached_count = len(self.cache.entries)
         self._set_busy(True,
-            f"[Scan 2/4] Collecting {len(all_labels)} actors (cache: {cached_count})...",
-            "#66ccff")
+            f"[Scan 2/4] Collecting {len(all_labels)} actors "
+            f"(cache: {cached_count})...",
+            theme.action_blue_fg)
 
         def _bg():
             def progress_cb(stage, detail):
@@ -984,10 +1268,9 @@ class MemoryTab(ttk.Frame):
 
     def _scan_phase3(self, scan_actor_refs: dict):
         self._scan_actor_refs = scan_actor_refs
-        self._set_busy(True, "[Scan 3/4] Resolving dependencies...", "#66ccff")
+        self._set_busy(True, "[Scan 3/4] Resolving dependencies...", theme.action_blue_fg)
         self.update_idletasks()
 
-        import time
         t0 = time.perf_counter()
 
         dep_graph = self.cache.build_dep_graph()
@@ -1001,7 +1284,8 @@ class MemoryTab(ttk.Frame):
 
         scan_actor_resolved: dict[str, set[str]] = {}
         for label, direct in scan_actor_refs.items():
-            scan_actor_resolved[label] = _resolve_all_deps(direct, dep_graph, asset_class)
+            scan_actor_resolved[label] = _resolve_all_deps(
+                direct, dep_graph, asset_class)
         self._scan_actor_resolved = scan_actor_resolved
         self._scan_asset_to_actors = build_asset_to_actors(scan_actor_resolved)
 
@@ -1033,14 +1317,13 @@ class MemoryTab(ttk.Frame):
         use_streaming = self._streaming_var.get()
         total = gs.grid_nx * gs.grid_ny
 
-        self._set_busy(True, f"[Scan 4/4] Computing 0/{total} grids...", "#66ccff")
+        self._set_busy(True, f"[Scan 4/4] Computing 0/{total} grids...", theme.action_blue_fg)
         self.update_idletasks()
 
         grid_memory: dict[tuple[int, int], float] = {}
         grid_cells: dict[tuple[int, int], list] = {}
 
         def _bg():
-            import time
             t0 = time.perf_counter()
             done = 0
             for gy in range(gs.grid_ny):
@@ -1071,7 +1354,8 @@ class MemoryTab(ttk.Frame):
 
             dt = time.perf_counter() - t0
             tag = " (streaming)" if use_streaming else ""
-            print(f"[scan] Phase 4 grid compute{tag}: {dt*1000:.0f}ms, {len(grid_memory)} non-empty grids")
+            print(f"[scan] Phase 4 grid compute{tag}: {dt*1000:.0f}ms, "
+                  f"{len(grid_memory)} non-empty grids")
             self.after(0, lambda: self._scan_complete(grid_memory, grid_cells))
 
         threading.Thread(target=_bg, daemon=True).start()
@@ -1079,6 +1363,7 @@ class MemoryTab(ttk.Frame):
     def _scan_complete(self, grid_memory, grid_cells):
         self._grid_memory = grid_memory
         self._grid_cells = grid_cells
+
         self.grid_scan.set_grid_data(grid_memory)
 
         vals = [v / (1024 * 1024) for v in grid_memory.values() if v > 0]
@@ -1088,10 +1373,10 @@ class MemoryTab(ttk.Frame):
             False,
             f"\u2714 Scan complete: max {max_mb:.1f} MB, avg {avg_mb:.1f} MB, "
             f"{len(grid_memory)} grids | cache: {len(self.cache.entries)}",
-            "#66cc66",
+            theme.status_ok,
         )
 
-    # ── Grid Interaction ──────────────────────────────────────────────────────
+    # ── Grid Interaction ─────────────────────────────────────────────────────
 
     def _on_grid_select(self, gx: int, gy: int):
         loaded = self._grid_cells.get((gx, gy))
@@ -1154,24 +1439,34 @@ class MemoryTab(ttk.Frame):
             raw_memory=self._scan_asset_memory if use_streaming else None)
 
         total_mb = sum(effective_mem.get(p, 0) for p in global_assets) / (1024 * 1024)
-        raw_mb = sum(self._scan_asset_memory.get(p, 0) for p in global_assets) / (1024 * 1024)
-        streaming_tag = f" (raw {raw_mb:.1f} MB)" if use_streaming and abs(raw_mb - total_mb) > 0.1 else ""
+        raw_mb = sum(self._scan_asset_memory.get(p, 0)
+                     for p in global_assets) / (1024 * 1024)
+        streaming_tag = (f" (raw {raw_mb:.1f} MB)"
+                         if use_streaming and abs(raw_mb - total_mb) > 0.1 else "")
         self.status_label.configure(
             text=f"Grid ({gx},{gy}) | {len(loaded)} cells | "
                  f"{len(global_assets)} assets | {total_mb:.1f} MB{streaming_tag}",
-            fg="#66ccff")
+            fg=theme.action_blue_fg)
 
     def _on_grid_dblclick(self, gx: int, gy: int):
+        if not connection.connected:
+            return
         cx, cy = self.grid_scan.grid_center(gx, gy)
         threading.Thread(target=lambda: move_camera_to(cx, cy, 5000),
                          daemon=True).start()
 
-    # ── Capture ───────────────────────────────────────────────────────────────
+    # ── Capture ──────────────────────────────────────────────────────────────
 
     def _capture(self):
         if self._busy:
             return
-        self._set_busy(True, "[1/3] Fetching camera & grid params...", "#ffd966")
+        if not connection.connected:
+            self.status_label.configure(
+                text="[Offline] Capture unavailable — use Scan All with cached data",
+                fg=theme.status_error)
+            return
+        self._set_busy(True, "[1/3] Fetching camera & grid params...", theme.action_gold_fg)
+
         def _bg():
             cam = fetch_camera_info()
             gp = fetch_grid_params_with_fallback(self.all_cells)
@@ -1204,13 +1499,14 @@ class MemoryTab(ttk.Frame):
 
         cached_count = len(self.cache.entries)
         self._set_busy(True,
-            f"[2/3] Collecting {len(all_labels)} actors (cache: {cached_count})...",
-            "#ffd966")
+            f"[2/3] Collecting {len(all_labels)} actors "
+            f"(cache: {cached_count})...",
+            theme.action_gold_fg)
 
         def _bg2():
             def progress_cb(stage, detail):
-                self.after(0, lambda d=detail: self.status_label.configure(text=f"[2/3] {d}"))
-
+                self.after(0, lambda d=detail:
+                    self.status_label.configure(text=f"[2/3] {d}"))
             actor_refs = fetch_memory_data(list(all_labels), self.cache, progress_cb)
             self.after(0, lambda: self._on_memory_loaded(actor_refs))
 
@@ -1219,7 +1515,7 @@ class MemoryTab(ttk.Frame):
     def _on_memory_loaded(self, actor_refs: dict[str, list[str]]):
         self.actor_refs = actor_refs
 
-        self._set_busy(True, "[3/3] Building cache views...", "#ffd966")
+        self._set_busy(True, "[3/3] Building cache views...", theme.action_gold_fg)
         self.update_idletasks()
         self._rebuild_cache_views()
 
@@ -1242,10 +1538,13 @@ class MemoryTab(ttk.Frame):
         self.update_idletasks()
         self._update_resource_table(self.loaded_cells, raw_memory=raw_memory)
 
-        total_mb = sum(effective_mem.get(p, 0) for p in self.global_assets) / (1024 * 1024)
-        raw_mb = sum(self._asset_memory.get(p, 0) for p in self.global_assets) / (1024 * 1024)
+        total_mb = sum(effective_mem.get(p, 0)
+                       for p in self.global_assets) / (1024 * 1024)
+        raw_mb = sum(self._asset_memory.get(p, 0)
+                     for p in self.global_assets) / (1024 * 1024)
         cx, cy = self._capture_cam or (0, 0)
-        streaming_tag = f" | raw {raw_mb:.1f} MB" if use_streaming and abs(raw_mb - total_mb) > 0.1 else ""
+        streaming_tag = (f" | raw {raw_mb:.1f} MB"
+                         if use_streaming and abs(raw_mb - total_mb) > 0.1 else "")
         self._set_busy(
             False,
             f"\u2714 ({cx:.0f}, {cy:.0f}) | "
@@ -1253,15 +1552,13 @@ class MemoryTab(ttk.Frame):
             f"{len(self.global_assets)} assets | "
             f"{total_mb:.1f} MB (deduplicated){streaming_tag} | "
             f"cache: {len(self.cache.entries)}",
-            "#66cc66",
+            theme.status_ok,
         )
 
         if not self._polling:
             self.start_polling()
 
     def _rebuild_cache_views(self):
-        """Build flat lookup dicts from cache once; reuse until next capture."""
-        import time
         t0 = time.perf_counter()
         self._dep_graph = self.cache.build_dep_graph()
         self._asset_memory = self.cache.build_asset_memory()
@@ -1269,16 +1566,16 @@ class MemoryTab(ttk.Frame):
         self._tex_info = self.cache.build_tex_info()
         self._actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
         print(f"[perf] _rebuild_cache_views: {len(self.cache.entries)} entries, "
-              f"{len(self._tex_info)} textures in {(time.perf_counter()-t0)*1000:.0f}ms")
+              f"{len(self._tex_info)} textures in "
+              f"{(time.perf_counter()-t0)*1000:.0f}ms")
 
     def _compute_all(self):
-        """Pre-compute actor_resolved, cell_assets, cell_memory, global_assets."""
-        import time
         t0 = time.perf_counter()
 
         self.actor_resolved = {}
         for label, direct in self.actor_refs.items():
-            self.actor_resolved[label] = _resolve_all_deps(direct, self._dep_graph, self._asset_class)
+            self.actor_resolved[label] = _resolve_all_deps(
+                direct, self._dep_graph, self._asset_class)
         t1 = time.perf_counter()
 
         self.cell_assets = {}
@@ -1309,7 +1606,8 @@ class MemoryTab(ttk.Frame):
 
         self.actor_memory = {}
         for label, assets in self.actor_resolved.items():
-            self.actor_memory[label] = sum(effective_mem.get(p, 0) for p in assets)
+            self.actor_memory[label] = sum(
+                effective_mem.get(p, 0) for p in assets)
 
         self.cell_memory = {}
         for cid, assets in self.cell_assets.items():
@@ -1322,7 +1620,7 @@ class MemoryTab(ttk.Frame):
               f"actors={len(self.actor_resolved)} cells={len(self.cell_assets)} "
               f"global={len(self.global_assets)}")
 
-    # ── Level Filter ──────────────────────────────────────────────────────────
+    # ── Level Filter ─────────────────────────────────────────────────────────
 
     def _on_level_change(self):
         if not self._capture_cam:
@@ -1346,7 +1644,6 @@ class MemoryTab(ttk.Frame):
     # ── Streaming Toggle ─────────────────────────────────────────────────────
 
     def _on_streaming_toggle(self):
-        """Re-run computation when streaming checkbox changes."""
         if self._busy:
             return
 
@@ -1368,17 +1665,19 @@ class MemoryTab(ttk.Frame):
 
             self.mem_map.set_loaded_cells(self.loaded_cells, self.cell_memory)
             self._populate_cell_tree()
-            self.stats_chart.update(self.global_assets, effective_mem, self._asset_class)
+            self.stats_chart.update(self.global_assets, effective_mem,
+                                    self._asset_class)
             self._update_resource_table(self.loaded_cells, raw_memory=raw_memory)
 
-            total_mb = sum(effective_mem.get(p, 0) for p in self.global_assets) / (1024 * 1024)
+            total_mb = sum(effective_mem.get(p, 0)
+                           for p in self.global_assets) / (1024 * 1024)
             tag = " (streaming)" if use_streaming else " (raw)"
             self.status_label.configure(
-                text=f"Recalculated{tag}: {total_mb:.1f} MB | {len(self.global_assets)} assets",
-                fg="#8bc34a")
+                text=f"Recalculated{tag}: {total_mb:.1f} MB | "
+                     f"{len(self.global_assets)} assets",
+                fg=theme.status_streaming)
 
     def _scan_phase4_recompute(self):
-        """Recompute grid memory in background thread for toggle."""
         gs = self.grid_scan
         gp = self.grid_params
         all_cells = self.all_cells
@@ -1392,10 +1691,9 @@ class MemoryTab(ttk.Frame):
         total = gs.grid_nx * gs.grid_ny
 
         tag = " (streaming)" if use_streaming else " (raw)"
-        self._set_busy(True, f"Recomputing{tag} 0/{total} grids...", "#8bc34a")
+        self._set_busy(True, f"Recomputing{tag} 0/{total} grids...", theme.status_streaming)
 
         def _bg():
-            import time
             t0 = time.perf_counter()
             grid_memory: dict[tuple[int, int], float] = {}
             grid_cells: dict[tuple[int, int], list] = {}
@@ -1404,7 +1702,8 @@ class MemoryTab(ttk.Frame):
             for gy in range(gs.grid_ny):
                 for gx in range(gs.grid_nx):
                     cx, cy = gs.grid_center(gx, gy)
-                    loaded = [c for c in all_cells if is_cell_loaded(c, cx, cy, gp)]
+                    loaded = [c for c in all_cells
+                              if is_cell_loaded(c, cx, cy, gp)]
                     spatial = [c for c in loaded if not c.always_loaded]
                     if not spatial:
                         done += 1
@@ -1424,11 +1723,13 @@ class MemoryTab(ttk.Frame):
                     grid_cells[(gx, gy)] = loaded
                     done += 1
                 row_done = done
-                self.after(0, lambda d=row_done: self.status_label.configure(
-                    text=f"Recomputing{tag} {d}/{total} grids..."))
+                self.after(0, lambda d=row_done:
+                    self.status_label.configure(
+                        text=f"Recomputing{tag} {d}/{total} grids..."))
 
             dt = time.perf_counter() - t0
-            print(f"[toggle] Recompute{tag}: {dt*1000:.0f}ms, {len(grid_memory)} grids")
+            print(f"[toggle] Recompute{tag}: {dt*1000:.0f}ms, "
+                  f"{len(grid_memory)} grids")
             self.after(0, lambda: self._scan_recompute_done(
                 grid_memory, grid_cells, use_streaming))
 
@@ -1447,16 +1748,15 @@ class MemoryTab(ttk.Frame):
             False,
             f"Recalculated{tag}: max {max_mb:.1f} MB, avg {avg_mb:.1f} MB, "
             f"{len(grid_memory)} grids",
-            "#8bc34a")
+            theme.status_streaming)
 
         sel = self.grid_scan.selected
         if sel and sel in self._grid_cells:
             self._on_grid_select(sel[0], sel[1])
 
-    # ── Cell / Actor / Resource Lists ─────────────────────────────────────────
+    # ── Cell / Actor / Resource Lists ────────────────────────────────────────
 
     def _update_stats_for_cells(self, cells: list[Cell]):
-        """Update Stats chart for the given cells' merged asset set."""
         merged = set()
         for cell in cells:
             merged |= self.cell_assets.get(cell.short_id, set())
@@ -1466,7 +1766,8 @@ class MemoryTab(ttk.Frame):
     def _insert_cell_row(self, cell: Cell):
         mem_mb = self.cell_memory.get(cell.short_id, 0) / (1024 * 1024)
         short = cell_short_label(cell)
-        grid_short = cell.grid_name.split("_")[-1] if "_" in cell.grid_name else cell.grid_name
+        grid_short = (cell.grid_name.split("_")[-1]
+                      if "_" in cell.grid_name else cell.grid_name)
         self.cell_tree.insert("", tk.END, iid=cell.short_id, values=(
             grid_short, short, cell.level,
             "Y" if cell.spatially_loaded else "",
@@ -1476,7 +1777,9 @@ class MemoryTab(ttk.Frame):
 
     def _populate_cell_tree(self):
         self.cell_tree.delete(*self.cell_tree.get_children())
-        for cell in sorted(self.loaded_cells, key=lambda c: self.cell_memory.get(c.short_id, 0), reverse=True):
+        for cell in sorted(self.loaded_cells,
+                           key=lambda c: self.cell_memory.get(c.short_id, 0),
+                           reverse=True):
             self._insert_cell_row(cell)
         children = self.cell_tree.get_children()
         if children:
@@ -1485,7 +1788,9 @@ class MemoryTab(ttk.Frame):
 
     def _on_map_selection(self, selected: list[Cell]):
         self.cell_tree.delete(*self.cell_tree.get_children())
-        for cell in sorted(selected, key=lambda c: self.cell_memory.get(c.short_id, 0), reverse=True):
+        for cell in sorted(selected,
+                           key=lambda c: self.cell_memory.get(c.short_id, 0),
+                           reverse=True):
             self._insert_cell_row(cell)
         self.cell_list_label.configure(text=f"Selected Cells: {len(selected)}")
         self._update_resource_table(selected)
@@ -1537,8 +1842,8 @@ class MemoryTab(ttk.Frame):
             cx = self.actor_tree.winfo_rootx() + e.x + 14
             cy = self.actor_tree.winfo_rooty() + e.y + 14
             self._actor_tooltip.geometry(f"+{cx}+{cy}")
-            tk.Label(self._actor_tooltip, text=txt, bg="#444", fg="#eee",
-                     font=("Consolas", 8), justify=tk.LEFT, padx=6, pady=3,
+            tk.Label(self._actor_tooltip, text=txt, bg=theme.bg_tooltip, fg=theme.fg_bright,
+                     font=theme.font("sm"), justify=tk.LEFT, padx=6, pady=3,
                      relief=tk.SOLID, bd=1).pack()
         else:
             self._on_actor_leave(e)
@@ -1554,9 +1859,10 @@ class MemoryTab(ttk.Frame):
             return
         values = self.actor_tree.item(sel[0], "values")
         name = values[0] if values else ""
-        if not name:
+        if not name or not connection.connected:
             return
-        threading.Thread(target=lambda: select_and_focus(name), daemon=True).start()
+        threading.Thread(target=lambda: select_and_focus(name),
+                         daemon=True).start()
 
     _RES_TABLE_MAX = 500
 
@@ -1564,10 +1870,9 @@ class MemoryTab(ttk.Frame):
                                actor_resolved=None, asset_memory=None,
                                asset_class=None, cell_assets=None,
                                raw_memory=None):
-        """Update resource table. asset_memory = effective (possibly streaming-adjusted).
-        raw_memory = original full sizes (optional, for tooltip comparison)."""
         _actor_resolved = actor_resolved or self.actor_resolved
-        _asset_memory = asset_memory or self._streaming_adjusted or self._asset_memory
+        _asset_memory = (asset_memory or self._streaming_adjusted
+                         or self._asset_memory)
         _asset_class = asset_class or self._asset_class
         _cell_assets = cell_assets or self.cell_assets
         _raw_memory = raw_memory
@@ -1618,9 +1923,10 @@ class MemoryTab(ttk.Frame):
         if _raw_memory and abs(raw_total - total) > 1024:
             raw_tag = f" | raw {raw_total / (1024*1024):.3f} MB"
         self.total_label.configure(
-            text=f"Total (deduplicated): {total_mb:.3f} MB{raw_tag}  |  {len(items)} resources{suffix}")
+            text=f"Total (deduplicated): {total_mb:.3f} MB{raw_tag}  |  "
+                 f"{len(items)} resources{suffix}")
 
-    # ── Resource Tooltip + DblClick ───────────────────────────────────────────
+    # ── Resource Tooltip + DblClick ──────────────────────────────────────────
 
     def _on_res_motion(self, e):
         row = self.res_tree.identify_row(e.y)
@@ -1634,12 +1940,14 @@ class MemoryTab(ttk.Frame):
                 path = self._res_full_path[row]
                 ti = self._tex_info.get(path) or self._scan_tex_info.get(path)
                 if ti:
-                    txt += f"\nTexture: {ti.get('sx',0)}x{ti.get('sy',0)}, {ti.get('mips',0)} mips"
+                    txt += (f"\nTexture: {ti.get('sx',0)}x{ti.get('sy',0)}, "
+                            f"{ti.get('mips',0)} mips")
                     if ti.get('never_stream'):
                         txt += " (NeverStream)"
         elif row and col == "#5" and row in self._res_actor_map:
             actor_dict = self._res_actor_map[row]
-            lines = [f"{label}: {path}" for label, path in sorted(actor_dict.items())[:30]]
+            lines = [f"{label}: {path}"
+                     for label, path in sorted(actor_dict.items())[:30]]
             txt = "\n".join(lines)
             if len(actor_dict) > 30:
                 txt += f"\n... +{len(actor_dict) - 30} more"
@@ -1652,8 +1960,9 @@ class MemoryTab(ttk.Frame):
             cx = self.res_tree.winfo_rootx() + e.x + 14
             cy = self.res_tree.winfo_rooty() + e.y + 14
             self._res_tooltip.geometry(f"+{cx}+{cy}")
-            tk.Label(self._res_tooltip, text=txt, bg="#444", fg="#eee", font=("Consolas", 8),
-                     justify=tk.LEFT, padx=6, pady=3, relief=tk.SOLID, bd=1).pack()
+            tk.Label(self._res_tooltip, text=txt, bg=theme.bg_tooltip, fg=theme.fg_bright,
+                     font=theme.font("sm"), justify=tk.LEFT, padx=6, pady=3,
+                     relief=tk.SOLID, bd=1).pack()
         else:
             self._on_res_leave(e)
 
@@ -1667,9 +1976,10 @@ class MemoryTab(ttk.Frame):
         if not sel:
             return
         path = self._res_full_path.get(sel[0])
-        if not path:
+        if not path or not connection.connected:
             return
-        threading.Thread(target=lambda: browse_to_asset(path), daemon=True).start()
+        threading.Thread(target=lambda: browse_to_asset(path),
+                         daemon=True).start()
 
     def _on_res_rightclick(self, e):
         row = self.res_tree.identify_row(e.y)
@@ -1681,28 +1991,40 @@ class MemoryTab(ttk.Frame):
         if not path:
             return
 
-        menu = tk.Menu(self, tearoff=0, bg="#3c3c3c", fg="#ddd",
-                       activebackground="#505050", activeforeground="#fff",
-                       font=("Consolas", 9))
+        menu = tk.Menu(self, tearoff=0, bg=theme.ctrl_bg, fg=theme.fg_primary,
+                       activebackground=theme.ctrl_hover, activeforeground=theme.fg_bright,
+                       font=theme.font("md"))
+
+        offline = not connection.connected
         menu.add_command(label="Browse to Asset",
+                         state=tk.DISABLED if offline else tk.NORMAL,
                          command=lambda: threading.Thread(
-                             target=lambda: browse_to_asset(path), daemon=True).start())
+                             target=lambda: browse_to_asset(path),
+                             daemon=True).start())
         menu.add_command(label="Open in Editor",
+                         state=tk.DISABLED if offline else tk.NORMAL,
                          command=lambda: threading.Thread(
-                             target=lambda: open_asset_editor(path), daemon=True).start())
+                             target=lambda: open_asset_editor(path),
+                             daemon=True).start())
 
         if actor_dict:
-            actor_menu = tk.Menu(menu, tearoff=0, bg="#3c3c3c", fg="#ddd",
-                                 activebackground="#505050", activeforeground="#fff",
-                                 font=("Consolas", 9))
+            actor_menu = tk.Menu(menu, tearoff=0, bg=theme.ctrl_bg, fg=theme.fg_primary,
+                                 activebackground=theme.ctrl_hover,
+                                 activeforeground=theme.fg_bright,
+                                 font=theme.font("md"))
             for label in sorted(actor_dict.keys())[:50]:
                 actor_menu.add_command(
                     label=label,
+                    state=tk.DISABLED if offline else tk.NORMAL,
                     command=lambda l=label: threading.Thread(
-                        target=lambda: select_and_focus(l), daemon=True).start())
+                        target=lambda: select_and_focus(l),
+                        daemon=True).start())
             if len(actor_dict) > 50:
-                actor_menu.add_command(label=f"... +{len(actor_dict) - 50} more", state=tk.DISABLED)
-            menu.add_cascade(label=f"Select Actor ({len(actor_dict)})", menu=actor_menu)
+                actor_menu.add_command(
+                    label=f"... +{len(actor_dict) - 50} more",
+                    state=tk.DISABLED)
+            menu.add_cascade(label=f"Select Actor ({len(actor_dict)})",
+                             menu=actor_menu)
 
         menu.tk_popup(e.x_root, e.y_root)
         menu.grab_release()

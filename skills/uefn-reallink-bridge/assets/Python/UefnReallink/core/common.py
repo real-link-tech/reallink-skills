@@ -1,20 +1,10 @@
-"""wp_common.py — 常量 + 数据结构 + 工具函数"""
+"""core/common.py — 数据结构 + 工具函数"""
 
 import re
 import colorsys
 import tkinter as tk
 from tkinter import ttk
 from dataclasses import dataclass, field
-
-# ─── UI Constants ─────────────────────────────────────────────────────────────
-
-BG = "#1e1e1e"
-BG2 = "#2b2b2b"
-FG = "#d4d4d4"
-ACCENT = "#264f78"
-SEL_FILL = "#ffffff40"
-GRID_LINE = "#444444"
-CROSSHAIR = "#ffffff80"
 
 # ─── Resource Type Color Mapping ──────────────────────────────────────────────
 
@@ -51,7 +41,7 @@ _RESOURCE_TYPE_PREFIX_COLORS = [
 RESOURCE_TYPE_COLOR_DEFAULT = "#888888"
 
 
-# ─── Data Structures ─────────────────────────────────────────────────────────
+# ─── Data Structures ──────────────────────────────────────────────────────────
 
 @dataclass
 class ActorDesc:
@@ -62,8 +52,8 @@ class ActorDesc:
     base_class: str = ""
     spatially_loaded: bool = True
     hlod_relevant: bool = False
-    bounds_min: tuple = (0, 0, 0)
-    bounds_max: tuple = (0, 0, 0)
+    bounds_min: tuple = (0.0, 0.0, 0.0)
+    bounds_max: tuple = (0.0, 0.0, 0.0)
     runtime_grid: str = "None"
 
 
@@ -82,42 +72,51 @@ class Cell:
     actor_count: int = 0
     always_loaded: bool = False
     spatially_loaded: bool = True
-    content_bounds_min: tuple = (0, 0, 0)
-    content_bounds_max: tuple = (0, 0, 0)
-    cell_bounds_min: tuple = (0, 0, 0)
-    cell_bounds_max: tuple = (0, 0, 0)
+    content_bounds_min: tuple = (0.0, 0.0, 0.0)
+    content_bounds_max: tuple = (0.0, 0.0, 0.0)
+    cell_bounds_min: tuple = (0.0, 0.0, 0.0)
+    cell_bounds_max: tuple = (0.0, 0.0, 0.0)
     is_2d: bool = True
-    actors: list = field(default_factory=list)
     grid_name: str = ""
     level: int = 0
     grid_x: int = 0
     grid_y: int = 0
     data_layer: str = ""
+    actors: list = field(default_factory=list)
 
+
+# ─── Cell Name Parsing ────────────────────────────────────────────────────────
 
 _RE_CELL_NAME = re.compile(r'^(.+?)_L(\d+)_X(-?\d+)_Y(-?\d+)(?:_(d[0-9A-Fa-f]+))?$')
 
 
-def parse_cell_name(cell: Cell):
-    m = _RE_CELL_NAME.match(cell.name)
+def parse_cell_name(name: str) -> tuple[str, int, int, int, str]:
+    """Returns (grid_name, level, grid_x, grid_y, data_layer)."""
+    m = _RE_CELL_NAME.match(name)
     if m:
-        cell.grid_name = m.group(1)
-        cell.level = int(m.group(2))
-        cell.grid_x = int(m.group(3))
-        cell.grid_y = int(m.group(4))
-        cell.data_layer = m.group(5) or ""
+        return (
+            m.group(1) or "",
+            int(m.group(2)),
+            int(m.group(3)),
+            int(m.group(4)),
+            m.group(5) or "",
+        )
+    return name, 0, 0, 0, ""
 
 
 def cell_short_label(cell: Cell) -> str:
+    if cell.always_loaded:
+        return "PersistentLevel"
     s = f"L{cell.level}_X{cell.grid_x}_Y{cell.grid_y}"
     if cell.data_layer:
         s += f"_{cell.data_layer}"
     return s
 
 
-# ─── Utility Functions ────────────────────────────────────────────────────────
+# ─── UI Helpers ───────────────────────────────────────────────────────────────
 
 def heatmap_color(ratio: float) -> str:
+    """ratio in [0,1] → hex color: near-black for low, orange→red for high."""
     r = max(0.0, min(1.0, ratio))
     if r < 0.01:
         return "#1a1a1a"
@@ -159,26 +158,23 @@ def make_sortable(tree: ttk.Treeview):
         tree.heading(col, command=lambda c=col: _sort(c))
 
 
+# ─── Resource Classification ──────────────────────────────────────────────────
+
 def classify_resource(path: str) -> str:
-    """Infer resource type from asset path."""
     p = path.lower()
-    if "staticmesh" in p or "/sm_" in p or "/s_" in p:
+    if "texture" in p or "/t_" in p:
+        return "Texture"
+    if "material" in p or "/m_" in p or "/mi_" in p:
+        return "Material"
+    if "staticmesh" in p or "/sm_" in p:
         return "StaticMesh"
     if "skeletalmesh" in p or "/sk_" in p:
         return "SkeletalMesh"
-    if "material" in p:
-        if "instance" in p or "/mi_" in p:
-            return "MaterialInstance"
-        return "Material"
-    if "texture" in p or "/t_" in p:
-        return "Texture2D"
-    if "sound" in p:
-        if "cue" in p:
-            return "SoundCue"
-        return "SoundWave"
-    if "niagara" in p or "/ns_" in p or "/ne_" in p:
+    if "sound" in p or "/s_" in p or "/sfx_" in p:
+        return "Sound"
+    if "niagara" in p or "/ns_" in p or "/nfx_" in p:
         return "Niagara"
-    if "animation" in p or "/a_" in p or "montage" in p:
+    if "anim" in p or "/a_" in p or "montage" in p:
         return "Animation"
     if "particle" in p or "/p_" in p:
         return "Particle"

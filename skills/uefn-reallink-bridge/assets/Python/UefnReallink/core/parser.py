@@ -1,7 +1,9 @@
-"""wp_parser.py — World Partition Streaming Generation Log 解析器"""
+"""core/parser.py — World Partition Streaming Generation Log 解析器"""
+
+from __future__ import annotations
 
 import re
-from wp_common import ActorDesc, CellActor, Cell, parse_cell_name
+from .common import ActorDesc, CellActor, Cell, parse_cell_name
 
 # ─── Regex Patterns ───────────────────────────────────────────────────────────
 
@@ -45,71 +47,46 @@ def parse_bounds(text):
             (float(m.group(1)), float(m.group(2)), float(m.group(3))),
             (float(m.group(4)), float(m.group(5)), float(m.group(6))),
         )
-    return (0, 0, 0), (0, 0, 0)
+    return None
 
+
+def _clamp_bounds(bmin, bmax):
+    cx = (bmin[0] + bmax[0]) / 2
+    cy = (bmin[1] + bmax[1]) / 2
+    cz = (bmin[2] + bmax[2]) / 2
+    ex = max(MIN_ACTOR_BOUND_EXTENT, min(MAX_ACTOR_BOUND_EXTENT, (bmax[0] - bmin[0]) / 2))
+    ey = max(MIN_ACTOR_BOUND_EXTENT, min(MAX_ACTOR_BOUND_EXTENT, (bmax[1] - bmin[1]) / 2))
+    ez = max(MIN_ACTOR_BOUND_EXTENT, min(MAX_ACTOR_BOUND_EXTENT, (bmax[2] - bmin[2]) / 2))
+    return (cx - ex, cy - ey, cz - ez), (cx + ex, cy + ey, cz + ez)
+
+
+# ─── Always-Loaded Bounds ─────────────────────────────────────────────────────
 
 _always_loaded_actor_cache: list[ActorDesc] = []
 
 
-def _compute_always_loaded_bounds(cell: Cell, other_cells: list[Cell]):
-    """Compute AlwaysLoaded cell bounds from its actors' RuntimeBounds,
-    clamped per-actor to [10cm, 100m]."""
-    min_x = min_y = min_z = float('inf')
-    max_x = max_y = max_z = float('-inf')
-    has_valid = False
-
-    for ca in cell.actors:
-        ad = None
-        for a_db in _always_loaded_actor_cache:
-            if a_db.name == ca.label or a_db.label == ca.label:
-                ad = a_db
-                break
-        if not ad:
-            continue
-        bmin, bmax = ad.bounds_min, ad.bounds_max
-        if bmin == (0, 0, 0) and bmax == (0, 0, 0):
-            continue
-        cx = (bmin[0] + bmax[0]) / 2
-        cy = (bmin[1] + bmax[1]) / 2
-        cz = (bmin[2] + bmax[2]) / 2
-        raw_ex = abs(bmax[0] - bmin[0]) / 2
-        raw_ey = abs(bmax[1] - bmin[1]) / 2
-        raw_ez = abs(bmax[2] - bmin[2]) / 2
-        ex = max(MIN_ACTOR_BOUND_EXTENT, min(raw_ex, MAX_ACTOR_BOUND_EXTENT))
-        ey = max(MIN_ACTOR_BOUND_EXTENT, min(raw_ey, MAX_ACTOR_BOUND_EXTENT))
-        ez = max(MIN_ACTOR_BOUND_EXTENT, min(raw_ez, MAX_ACTOR_BOUND_EXTENT))
-        min_x = min(min_x, cx - ex)
-        min_y = min(min_y, cy - ey)
-        min_z = min(min_z, cz - ez)
-        max_x = max(max_x, cx + ex)
-        max_y = max(max_y, cy + ey)
-        max_z = max(max_z, cz + ez)
-        has_valid = True
-
-    if not has_valid and other_cells:
-        for c in other_cells:
-            if c.cell_bounds_min != (0, 0, 0) or c.cell_bounds_max != (0, 0, 0):
-                min_x = min(min_x, c.cell_bounds_min[0])
-                min_y = min(min_y, c.cell_bounds_min[1])
-                min_z = min(min_z, c.cell_bounds_min[2])
-                max_x = max(max_x, c.cell_bounds_max[0])
-                max_y = max(max_y, c.cell_bounds_max[1])
-                max_z = max(max_z, c.cell_bounds_max[2])
-                has_valid = True
-
-    if has_valid:
-        cell.cell_bounds_min = (min_x, min_y, min_z)
-        cell.cell_bounds_max = (max_x, max_y, max_z)
-        cell.content_bounds_min = (min_x, min_y, min_z)
-        cell.content_bounds_max = (max_x, max_y, max_z)
+def _compute_always_loaded_bounds(persistent_cell: Cell, cells: list[Cell]):
+    if not _always_loaded_actor_cache:
+        return
+    xs = [a.bounds_min[0] for a in _always_loaded_actor_cache] + \
+         [a.bounds_max[0] for a in _always_loaded_actor_cache]
+    ys = [a.bounds_min[1] for a in _always_loaded_actor_cache] + \
+         [a.bounds_max[1] for a in _always_loaded_actor_cache]
+    zs = [a.bounds_min[2] for a in _always_loaded_actor_cache] + \
+         [a.bounds_max[2] for a in _always_loaded_actor_cache]
+    if xs:
+        persistent_cell.content_bounds_min = (min(xs), min(ys), min(zs))
+        persistent_cell.content_bounds_max = (max(xs), max(ys), max(zs))
+        persistent_cell.cell_bounds_min = persistent_cell.content_bounds_min
+        persistent_cell.cell_bounds_max = persistent_cell.content_bounds_max
 
 
-# ─── Main Parser ─────────────────────────────────────────────────────────────
+# ─── Main Parser ──────────────────────────────────────────────────────────────
 
-def parse_log(path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
+def parse_log(log_path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
     actors: dict[str, ActorDesc] = {}
     cells: list[Cell] = []
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
 
     current_cell: Cell | None = None
@@ -117,6 +94,7 @@ def parse_log(path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
     in_persistent = False
 
     for line in lines:
+        # ── Actor Descriptors (no state machine — match any line with Guid:) ──
         m = _RE_ACTOR_DESC.search(line)
         if m and "Guid:" in line and ("NativeClass:" in line or "BaseClass:" in line):
             guid = m.group(1) or ""
@@ -127,13 +105,15 @@ def parse_log(path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
                 hlod_relevant=(m.group(7) or "false").lower() == "true",
             )
             if "RuntimeBounds:" in line:
-                bmin, bmax = parse_bounds(line[line.index("RuntimeBounds:"):])
-                ad.bounds_min, ad.bounds_max = bmin, bmax
+                b = parse_bounds(line[line.index("RuntimeBounds:"):])
+                if b:
+                    ad.bounds_min, ad.bounds_max = _clamp_bounds(*b)
             rg = re.search(r'RuntimeGrid:(\S+)', line)
             if rg:
                 ad.runtime_grid = rg.group(1)
             actors[guid] = ad
 
+        # ── Persistent Level section ──
         pm = _RE_PERSISTENT_HEADER.search(line)
         if pm:
             map_name = pm.group(1)
@@ -172,10 +152,15 @@ def parse_log(path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
                     cells.insert(0, persistent_cell)
                     persistent_cell = None
 
+        # ── Cell sections ──
         cm = _RE_CELL_HEADER.search(line)
         if cm:
             current_cell = Cell(name=cm.group(1), short_id=cm.group(2))
-            parse_cell_name(current_cell)
+            grid_name, level, gx, gy, _ = parse_cell_name(cm.group(1))
+            current_cell.grid_name = grid_name
+            current_cell.level = level
+            current_cell.grid_x = gx
+            current_cell.grid_y = gy
             cells.append(current_cell)
             continue
 
@@ -189,11 +174,15 @@ def parse_log(path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
             d2m = _RE_IS_2D.search(line)
             if d2m: current_cell.is_2d = d2m.group(1).lower() == "true"; continue
             if "Content Bounds:" in line:
-                bmin, bmax = parse_bounds(line)
-                current_cell.content_bounds_min, current_cell.content_bounds_max = bmin, bmax; continue
+                b = parse_bounds(line)
+                if b:
+                    current_cell.content_bounds_min, current_cell.content_bounds_max = b
+                continue
             if "Cell Bounds:" in line:
-                bmin, bmax = parse_bounds(line)
-                current_cell.cell_bounds_min, current_cell.cell_bounds_max = bmin, bmax; continue
+                b = parse_bounds(line)
+                if b:
+                    current_cell.cell_bounds_min, current_cell.cell_bounds_max = b
+                continue
             cam = _RE_CELL_ACTOR.search(line)
             if cam:
                 current_cell.actors.append(CellActor(path=cam.group(1), label=cam.group(2))); continue

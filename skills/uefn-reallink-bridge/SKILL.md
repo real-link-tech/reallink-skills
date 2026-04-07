@@ -108,6 +108,29 @@ unreal.EditorLevelLibrary.set_level_viewport_camera_info(
     unreal.Vector(0, 0, 1000), unreal.Rotator(-90, 0, 0))
 ```
 
+## Reallink UEFN Editor（独立 GUI 工具）
+
+`assets/Python/UefnReallink/` 下包含一个独立的 Tkinter GUI 工具，提供三个 Tab：
+
+- **Common** — 控制台指令输入 + 历史记录
+- **StreamingLayout** — World Partition Streaming Cell 可视化 + 搜索
+- **MemoryTest** — 内存分析：Grid Scan / Capture / 资源依赖树
+
+### 启动方式
+
+```powershell
+# 在线模式（自动连接编辑器）
+python -m UefnReallink.reallink_uefn_editor
+
+# 离线模式（从快照加载）
+python -m UefnReallink.reallink_uefn_editor --load snapshot.json
+
+# 保存快照
+python -m UefnReallink.reallink_uefn_editor --save snapshot.json
+```
+
+工作目录需为 `assets/Python/` 或将其加入 `PYTHONPATH`。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
