@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from ..core.common import Cell, heatmap_color
 from ..core.theme import theme
@@ -116,11 +117,70 @@ class CellMapCanvas:
 
     # ── Drawing ───────────────────────────────────────────────────────────────
 
+    def _nice_grid_step(self) -> float:
+        s = self._base_scale * self.scale
+        if s <= 1e-9:
+            return 1.0
+        target_px = 64.0
+        target_world = target_px / s
+        exp = math.floor(math.log10(max(target_world, 1e-9)))
+        base = 10 ** exp
+        for m in (1, 2, 5, 10):
+            step = base * m
+            if step >= target_world:
+                return step
+        return base * 10
+
+    def _draw_background_grid(self):
+        c = self.canvas
+        cw = max(c.winfo_width(), 1)
+        ch = max(c.winfo_height(), 1)
+        wx0, wy_top = self._s2w(0, 0)
+        wx1, wy_bottom = self._s2w(cw, ch)
+        min_x, max_x = min(wx0, wx1), max(wx0, wx1)
+        min_y, max_y = min(wy_bottom, wy_top), max(wy_bottom, wy_top)
+        step = self._nice_grid_step()
+        minor = "#3a3a3a"
+        axis = "#6a6a6a"
+        text = "#8a8a8a"
+
+        x = math.floor(min_x / step) * step
+        end_x = math.ceil(max_x / step) * step
+        while x <= end_x + step * 0.5:
+            sx, _ = self._w2s(x, 0)
+            color = axis if abs(x) < step * 0.25 else minor
+            width = 2 if abs(x) < step * 0.25 else 1
+            c.create_line(sx, 0, sx, ch, fill=color, width=width)
+            if 0 <= sx <= cw:
+                c.create_text(sx + 2, ch - 10, text=f"{x:.0f}", fill=text,
+                              anchor=tk.SW, font=theme.font("xs", mono=True))
+            x += step
+
+        y = math.floor(min_y / step) * step
+        end_y = math.ceil(max_y / step) * step
+        while y <= end_y + step * 0.5:
+            _, sy = self._w2s(0, y)
+            color = axis if abs(y) < step * 0.25 else minor
+            width = 2 if abs(y) < step * 0.25 else 1
+            c.create_line(0, sy, cw, sy, fill=color, width=width)
+            if 0 <= sy <= ch:
+                c.create_text(4, sy - 2, text=f"{y:.0f}", fill=text,
+                              anchor=tk.SW, font=theme.font("xs", mono=True))
+            y += step
+
+        c.create_text(cw - 10, ch - 10, text="X", fill="#9a9a9a",
+                      anchor=tk.SE, font=theme.font("sm", bold=True, mono=True))
+        c.create_text(10, 10, text="Y", fill="#9a9a9a",
+                      anchor=tk.NW, font=theme.font("sm", bold=True, mono=True))
+
     def _redraw(self):
         c = self.canvas
         c.delete("all")
         if not self.cells:
+            self._draw_background_grid()
             return
+
+        self._draw_background_grid()
 
         max_count = max((cl.actor_count for cl in self.cells), default=1) or 1
         sel_ids = {cl.short_id for cl in self.selected_cells}

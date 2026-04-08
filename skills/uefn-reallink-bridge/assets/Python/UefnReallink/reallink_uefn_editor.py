@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-import glob
+import webbrowser
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -33,17 +33,6 @@ from .tabs.memory_test_tab import MemoryTab
 from .widgets.connection_status import ConnectionStatusBar
 
 
-def _find_existing_log() -> str | None:
-    log_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""),
-                           "UnrealEditorFortnite", "Saved", "Logs",
-                           "WorldPartition")
-    if not os.path.isdir(log_dir):
-        return None
-    files = sorted(glob.glob(os.path.join(log_dir, "StreamingGeneration-*.log")),
-                   key=os.path.getmtime, reverse=True)
-    return files[0] if files else None
-
-
 class ReallinkUefnEditor(tk.Tk):
 
     def __init__(self, actors, cells, log_path):
@@ -55,6 +44,15 @@ class ReallinkUefnEditor(tk.Tk):
         self.configure(bg=theme.bg_secondary)
 
         self._setup_styles()
+
+        # ── 右上角文档按钮 ──────────────────────────────────────────────
+        top_bar = tk.Frame(self, bg=theme.bg_secondary)
+        top_bar.pack(fill=tk.X)
+        tk.Button(top_bar, text="📄 文档", bg=theme.bg_tertiary, fg="#CCCCCC",
+                  font=theme.font("md"), bd=0, padx=8, pady=2, cursor="hand2",
+                  command=lambda: webbrowser.open(
+                      "https://wiziutp3jof.feishu.cn/wiki/MbuPwi2GIijp0WkcT3wcwto4nTd?from=from_copylink"
+                  )).pack(side=tk.RIGHT, padx=6, pady=2)
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
@@ -70,7 +68,8 @@ class ReallinkUefnEditor(tk.Tk):
         project_name = (os.path.basename(os.path.dirname(log_path))
                         if log_path else "")
         self.memory_tab = MemoryTab(notebook, actors, cells,
-                                    project_name=project_name)
+                                    project_name=project_name,
+                                    on_refresh=self._on_refresh)
         notebook.add(self.memory_tab, text="MemoryTest")
 
         notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -163,7 +162,7 @@ class ReallinkUefnEditor(tk.Tk):
         else:
             self.memory_tab.stop_polling()
 
-    def _on_refresh(self):
+    def _on_refresh(self, callback=None):
         self.layout_tab.status_var.set("Triggering DumpStreamingGenerationLog ...")
         self.update_idletasks()
 
@@ -172,6 +171,8 @@ class ReallinkUefnEditor(tk.Tk):
             if not resp.get("success"):
                 self.after(0, lambda: self.layout_tab.status_var.set(
                     f"Trigger failed: {resp.get('error', '?')}"))
+                self.memory_tab._pending_scan_after_refresh = False
+                self.after(0, lambda: self.memory_tab._set_busy(False, ""))
                 return
 
             self.after(0, lambda: self.layout_tab.status_var.set(
@@ -189,31 +190,30 @@ class ReallinkUefnEditor(tk.Tk):
             if not log_path or not os.path.exists(log_path):
                 self.after(0, lambda: self.layout_tab.status_var.set(
                     "Error: Could not find StreamingGeneration log"))
+                self.memory_tab._pending_scan_after_refresh = False
+                self.after(0, lambda: self.memory_tab._set_busy(False, ""))
                 return
 
             actors, cells = parse_log(log_path)
-            self.after(0, lambda: self._reload_data(actors, cells, log_path))
+            self.after(0, lambda: self._reload_data(actors, cells, log_path, callback))
 
         threading.Thread(target=_bg, daemon=True).start()
 
-    def _reload_data(self, actors, cells, log_path):
+    def _reload_data(self, actors, cells, log_path, callback=None):
         self.layout_tab.reload(actors, cells, log_path)
         project_name = (os.path.basename(os.path.dirname(log_path))
                         if log_path else "")
         self.memory_tab.reload(actors, cells, project_name)
+        if callback:
+            callback()
 
 
 def main():
-    log_path = _find_existing_log()
-    if not log_path:
-        print("[reallink] No existing StreamingGeneration log found.")
-        print("[reallink] Click 'Refresh' in the StreamingLayout tab to trigger.")
-        actors, cells = {}, []
-        log_path = ""
-    else:
-        print(f"[reallink] Using existing log: {log_path}")
-        actors, cells = parse_log(log_path)
-        print(f"[reallink] {len(actors)} actors, {len(cells)} cells")
+    # 启动时不使用缓存日志，直接空数据启动
+    # 用户点击 Refresh 按钮后会 trigger_dump + find_latest_log 重新生成
+    print("[reallink] Starting editor — click 'Refresh' to trigger StreamingGeneration dump.")
+    actors, cells = {}, []
+    log_path = ""
 
     ReallinkUefnEditor(actors, cells, log_path).mainloop()
 

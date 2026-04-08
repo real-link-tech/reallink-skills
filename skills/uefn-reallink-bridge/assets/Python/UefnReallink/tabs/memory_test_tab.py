@@ -124,10 +124,15 @@ class GridScanCanvas:
         self.bottom_label.configure(text="Click Scan All")
         self._redraw()
 
-    def grid_center(self, gx: int, gy: int) -> tuple[float, float]:
+    def grid_bounds(self, gx: int, gy: int) -> tuple[float, float, float, float]:
         gs = self.grid_size
-        return (self.origin_x + gx * gs + gs / 2,
-                self.origin_y + gy * gs + gs / 2)
+        wx0 = self.origin_x + gx * gs
+        wy0 = self.origin_y + gy * gs
+        return wx0, wy0, wx0 + gs, wy0 + gs
+
+    def grid_center(self, gx: int, gy: int) -> tuple[float, float]:
+        wx0, wy0, wx1, wy1 = self.grid_bounds(gx, gy)
+        return (wx0 + wx1) / 2, (wy0 + wy1) / 2
 
     def set_grid_data(self, grid_memory: dict[tuple[int, int], float]):
         self.grid_memory = grid_memory
@@ -196,19 +201,82 @@ class GridScanCanvas:
             return (gx, gy)
         return None
 
+    def _nice_grid_step(self) -> float:
+        s = self._base_scale * self.scale
+        if s <= 1e-9:
+            return max(float(self.grid_size), 1.0)
+        target_px = 64.0
+        target_world = target_px / s
+        if target_world <= 0:
+            return max(float(self.grid_size), 1.0)
+        exp = math.floor(math.log10(target_world))
+        base = 10 ** exp
+        for m in (1, 2, 5, 10):
+            step = base * m
+            if step >= target_world:
+                return step
+        return base * 10
+
+    def _draw_background_grid(self):
+        c = self.canvas
+        cw = max(c.winfo_width(), 1)
+        ch = max(c.winfo_height(), 1)
+        wx0, wy_top = self._s2w(0, 0)
+        wx1, wy_bottom = self._s2w(cw, ch)
+        min_x, max_x = min(wx0, wx1), max(wx0, wx1)
+        min_y, max_y = min(wy_bottom, wy_top), max(wy_bottom, wy_top)
+
+        step = self._nice_grid_step()
+        if step <= 0:
+            return
+
+        minor = "#3a3a3a"
+        axis = "#6a6a6a"
+        text = "#8a8a8a"
+
+        start_x = math.floor(min_x / step) * step
+        end_x = math.ceil(max_x / step) * step
+        x = start_x
+        while x <= end_x + step * 0.5:
+            sx, _ = self._w2s(x, 0)
+            color = axis if abs(x) < step * 0.25 else minor
+            width = 2 if abs(x) < step * 0.25 else 1
+            c.create_line(sx, 0, sx, ch, fill=color, width=width)
+            if 0 <= sx <= cw:
+                c.create_text(sx + 2, ch - 10, text=f"{x:.0f}", fill=text,
+                              anchor=tk.SW, font=theme.font("xs", mono=True))
+            x += step
+
+        start_y = math.floor(min_y / step) * step
+        end_y = math.ceil(max_y / step) * step
+        y = start_y
+        while y <= end_y + step * 0.5:
+            _, sy = self._w2s(0, y)
+            color = axis if abs(y) < step * 0.25 else minor
+            width = 2 if abs(y) < step * 0.25 else 1
+            c.create_line(0, sy, cw, sy, fill=color, width=width)
+            if 0 <= sy <= ch:
+                c.create_text(4, sy - 2, text=f"{y:.0f}", fill=text,
+                              anchor=tk.SW, font=theme.font("xs", mono=True))
+            y += step
+
+        c.create_text(cw - 10, ch - 10, text="X", fill="#9a9a9a",
+                      anchor=tk.SE, font=theme.font("sm", bold=True, mono=True))
+        c.create_text(10, 10, text="Y", fill="#9a9a9a",
+                      anchor=tk.NW, font=theme.font("sm", bold=True, mono=True))
+
     def _redraw(self):
         c = self.canvas
         c.delete("all")
         max_mem = self._max_memory if self._max_memory > 0 else 1.0
         gs = self.grid_size
 
+        self._draw_background_grid()
+
         for (gx, gy), mem in self.grid_memory.items():
             if mem <= 0:
                 continue
-            wx0 = self.origin_x + gx * gs
-            wy0 = self.origin_y + gy * gs
-            wx1 = wx0 + gs
-            wy1 = wy0 + gs
+            wx0, wy0, wx1, wy1 = self.grid_bounds(gx, gy)
 
             sx0, sy0 = self._w2s(wx0, wy0)
             sx1, sy1 = self._w2s(wx1, wy1)
@@ -281,9 +349,10 @@ class GridScanCanvas:
         if g:
             mem = self.grid_memory.get(g, 0)
             mb = mem / (1024 * 1024) if mem > 0 else 0
-            wx, wy = self.grid_center(g[0], g[1])
+            wx0, wy0, wx1, wy1 = self.grid_bounds(g[0], g[1])
             self.coord_label.configure(
-                text=f"({g[0]},{g[1]}) {mb:.1f} MB  [{wx:.0f}, {wy:.0f}]")
+                text=(f"({g[0]},{g[1]}) {mb:.1f} MB  "
+                      f"[{wx0:.0f}, {wy0:.0f}] → [{wx1:.0f}, {wy1:.0f}]"))
         else:
             wx, wy = self._s2w(e.x, e.y)
             self.coord_label.configure(text=f"({wx:.0f}, {wy:.0f})")
@@ -404,11 +473,68 @@ class MemoryMapCanvas:
         wy = -(sy - ch / 2) / s - self.ty
         return wx, wy
 
+    def _nice_grid_step(self) -> float:
+        s = self._base_scale * self.scale
+        if s <= 1e-9:
+            return 1.0
+        target_px = 64.0
+        target_world = target_px / s
+        exp = math.floor(math.log10(max(target_world, 1e-9)))
+        base = 10 ** exp
+        for m in (1, 2, 5, 10):
+            step = base * m
+            if step >= target_world:
+                return step
+        return base * 10
+
+    def _draw_background_grid(self):
+        c = self.canvas
+        cw = max(c.winfo_width(), 1)
+        ch = max(c.winfo_height(), 1)
+        wx0, wy_top = self._s2w(0, 0)
+        wx1, wy_bottom = self._s2w(cw, ch)
+        min_x, max_x = min(wx0, wx1), max(wx0, wx1)
+        min_y, max_y = min(wy_bottom, wy_top), max(wy_bottom, wy_top)
+        step = self._nice_grid_step()
+        minor = "#3a3a3a"
+        axis = "#6a6a6a"
+        text = "#8a8a8a"
+
+        x = math.floor(min_x / step) * step
+        end_x = math.ceil(max_x / step) * step
+        while x <= end_x + step * 0.5:
+            sx, _ = self._w2s(x, 0)
+            color = axis if abs(x) < step * 0.25 else minor
+            width = 2 if abs(x) < step * 0.25 else 1
+            c.create_line(sx, 0, sx, ch, fill=color, width=width)
+            if 0 <= sx <= cw:
+                c.create_text(sx + 2, ch - 10, text=f"{x:.0f}", fill=text,
+                              anchor=tk.SW, font=theme.font("xs", mono=True))
+            x += step
+
+        y = math.floor(min_y / step) * step
+        end_y = math.ceil(max_y / step) * step
+        while y <= end_y + step * 0.5:
+            _, sy = self._w2s(0, y)
+            color = axis if abs(y) < step * 0.25 else minor
+            width = 2 if abs(y) < step * 0.25 else 1
+            c.create_line(0, sy, cw, sy, fill=color, width=width)
+            if 0 <= sy <= ch:
+                c.create_text(4, sy - 2, text=f"{y:.0f}", fill=text,
+                              anchor=tk.SW, font=theme.font("xs", mono=True))
+            y += step
+
+        c.create_text(cw - 10, ch - 10, text="X", fill="#9a9a9a",
+                      anchor=tk.SE, font=theme.font("sm", bold=True, mono=True))
+        c.create_text(10, 10, text="Y", fill="#9a9a9a",
+                      anchor=tk.NW, font=theme.font("sm", bold=True, mono=True))
+
     def _redraw(self):
         self._redraw_lock = True
         try:
             c = self.canvas
             c.delete("all")
+            self._draw_background_grid()
             if not self.loaded_cells:
                 self.count_label.configure(text="Loaded: 0")
                 return
@@ -685,11 +811,13 @@ class MemoryTab(ttk.Frame):
     """Memory analysis tab with map, stats chart, cell/actor/resource lists."""
 
     def __init__(self, parent, actors_db: dict[str, ActorDesc],
-                 all_cells: list[Cell], project_name: str = ""):
+                 all_cells: list[Cell], project_name: str = "",
+                 on_refresh=None):
         super().__init__(parent)
         self.actors_db = actors_db
         self.all_cells = all_cells
         self._cell_map_dict = {c.short_id: c for c in all_cells}
+        self._on_refresh = on_refresh
 
         self.grid_params: dict = {}
         self.loaded_cells: list[Cell] = []
@@ -719,6 +847,7 @@ class MemoryTab(ttk.Frame):
         self._poll_in_flight = False
         self._capture_cam: tuple[float, float] | None = None
         self._busy = False
+        self._pending_scan_after_refresh = False
 
         self._scan_actor_refs: dict[str, list[str]] = {}
         self._scan_actor_resolved: dict[str, set[str]] = {}
@@ -977,6 +1106,10 @@ class MemoryTab(ttk.Frame):
         self.status_label.configure(
             text="Data refreshed — click Scan All or Capture", fg=theme.status_ok)
 
+        if self._pending_scan_after_refresh:
+            self._pending_scan_after_refresh = False
+            self.after(0, self._scan_all)
+
     # ── Camera Polling ───────────────────────────────────────────────────────
 
     def start_polling(self):
@@ -1169,6 +1302,15 @@ class MemoryTab(ttk.Frame):
     def _scan_all(self):
         if self._busy:
             return
+
+        # 没有 cells 数据时，自动先触发 refresh，完成后再 scan
+        if not self.all_cells and self._on_refresh:
+            self._pending_scan_after_refresh = True
+            self.status_label.configure(
+                text="No data yet — refreshing first...", fg=theme.action_blue_fg)
+            self._on_refresh()
+            return
+
         try:
             meters = int(self._grid_size_var.get())
         except ValueError:

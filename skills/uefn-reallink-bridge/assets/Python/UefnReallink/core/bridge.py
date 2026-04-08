@@ -161,15 +161,40 @@ result = 'ok'
 
 _GRID_PARAMS_CODE = '''
 world = unreal.EditorLevelLibrary.get_editor_world()
-wp = world.get_world_partition()
-rsh = wp.get_runtime_hash_set()
-grids = rsh.get_runtime_hash_grids()
-result = {}
-for g in grids:
-    name = g.get_grid_name()
-    cs = g.get_cell_size()
-    lr = g.get_loading_range()
-    result[name] = {"cell_size": cs, "loading_range": lr}
+ws = world.get_world_settings()
+wp = ws.get_editor_property('world_partition')
+wp_path = wp.get_path_name()
+
+grid_params = {}
+try:
+    hash_set = None
+    for obj in unreal.ObjectIterator(unreal.Object):
+        try:
+            if obj is None:
+                continue
+            cls = obj.get_class()
+            if cls is None:
+                continue
+            cn = cls.get_name()
+            if cn == 'WorldPartitionRuntimeHashSet' and wp_path in obj.get_path_name():
+                hash_set = obj
+                break
+        except Exception:
+            continue
+
+    if hash_set:
+        partitions = hash_set.get_editor_property('RuntimePartitions')
+        for p in partitions:
+            name = str(p.get_editor_property('Name'))
+            ml = p.get_editor_property('MainLayer')
+            if ml:
+                cs = int(ml.get_editor_property('CellSize'))
+                lr = int(ml.get_editor_property('LoadingRange'))
+                grid_params[name] = {"cell_size": cs, "loading_range": lr}
+except Exception as e:
+    grid_params["_error"] = str(e)
+
+result = grid_params
 '''
 
 
@@ -251,10 +276,8 @@ result = 'ok'
 # ─── Trigger Dump ────────────────────────────────────────────────────────────
 
 _TRIGGER_DUMP_CODE = '''
-world = unreal.EditorLevelLibrary.get_editor_world()
-unreal.SystemLibrary.execute_console_command(
-    world, "wp.Runtime.DumpStreamingGenerationLog")
-result = "ok"
+unreal.SystemLibrary.execute_console_command(None, "wp.Editor.DumpStreamingGenerationLog")
+result = "dump triggered"
 '''
 
 
@@ -263,15 +286,17 @@ def trigger_dump() -> dict:
 
 
 def find_latest_log() -> str | None:
-    log_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""),
-                           "UnrealEditorFortnite", "Saved", "Logs",
-                           "WorldPartition")
-    if not os.path.isdir(log_dir):
-        return None
-    import glob
-    files = sorted(glob.glob(os.path.join(log_dir, "StreamingGeneration-*.log")),
-                   key=os.path.getmtime, reverse=True)
-    return files[0] if files else None
+    resp = uefn_cmd(
+        'import glob, os\n'
+        'log_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), '
+        '"UnrealEditorFortnite", "Saved", "Logs", "WorldPartition")\n'
+        'files = sorted(glob.glob(os.path.join(log_dir, "StreamingGeneration-*.log")), '
+        'key=os.path.getmtime, reverse=True)\n'
+        'result = files[0] if files else None'
+    )
+    if resp.get("success") and resp.get("result"):
+        return resp["result"]
+    return None
 
 
 # ─── Dep Cache ───────────────────────────────────────────────────────────────
