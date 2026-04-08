@@ -21,6 +21,7 @@ class CellMapCanvas:
         self.tx = 0.0
         self.ty = 0.0
         self._base_scale = 1.0
+        self._redraw_after_id = None
 
         self._dragging = False
         self._drag_start_w = (0.0, 0.0)
@@ -115,7 +116,20 @@ class CellMapCanvas:
         self.count_label.configure(text=f"Count: {len(cells)}")
         self.fit_view()
 
+    # ── Debounced redraw ──────────────────────────────────────────────────────
+
+    def _schedule_redraw(self):
+        if self._redraw_after_id is not None:
+            self.canvas.after_cancel(self._redraw_after_id)
+        self._redraw_after_id = self.canvas.after(16, self._do_redraw)
+
+    def _do_redraw(self):
+        self._redraw_after_id = None
+        self._redraw()
+
     # ── Drawing ───────────────────────────────────────────────────────────────
+
+    _MAX_GRID_LINES = 60
 
     def _nice_grid_step(self) -> float:
         s = self._base_scale * self.scale
@@ -144,26 +158,33 @@ class CellMapCanvas:
         axis = "#6a6a6a"
         text = "#8a8a8a"
 
-        x = math.floor(min_x / step) * step
+        start_x = math.floor(min_x / step) * step
         end_x = math.ceil(max_x / step) * step
+        n_x = int((end_x - start_x) / step) + 1
+        start_y = math.floor(min_y / step) * step
+        end_y = math.ceil(max_y / step) * step
+        n_y = int((end_y - start_y) / step) + 1
+
+        show_text = (n_x + n_y) < self._MAX_GRID_LINES
+
+        x = start_x
         while x <= end_x + step * 0.5:
             sx, _ = self._w2s(x, 0)
             color = axis if abs(x) < step * 0.25 else minor
             width = 2 if abs(x) < step * 0.25 else 1
             c.create_line(sx, 0, sx, ch, fill=color, width=width)
-            if 0 <= sx <= cw:
+            if show_text and 0 <= sx <= cw:
                 c.create_text(sx + 2, ch - 10, text=f"{x:.0f}", fill=text,
                               anchor=tk.SW, font=theme.font("xs", mono=True))
             x += step
 
-        y = math.floor(min_y / step) * step
-        end_y = math.ceil(max_y / step) * step
+        y = start_y
         while y <= end_y + step * 0.5:
             _, sy = self._w2s(0, y)
             color = axis if abs(y) < step * 0.25 else minor
             width = 2 if abs(y) < step * 0.25 else 1
             c.create_line(0, sy, cw, sy, fill=color, width=width)
-            if 0 <= sy <= ch:
+            if show_text and 0 <= sy <= ch:
                 c.create_text(4, sy - 2, text=f"{y:.0f}", fill=text,
                               anchor=tk.SW, font=theme.font("xs", mono=True))
             y += step
@@ -273,7 +294,7 @@ class CellMapCanvas:
 
     def _on_left_drag(self, e):
         self._mouse_x, self._mouse_y = e.x, e.y
-        self._redraw()
+        self._schedule_redraw()
 
     def _on_left_up(self, e):
         if self._dragging:
@@ -306,14 +327,14 @@ class CellMapCanvas:
                 self.tx += dx
                 self.ty += dy
                 self._pan_last = (e.x, e.y)
-                self._redraw()
+                self._schedule_redraw()
 
     def _on_right_up(self, e):
         self._panning = False
 
     def _on_scroll(self, e):
-        old_s = self._base_scale * self.scale
         factor = 1.15 if e.delta > 0 else 1 / 1.15
+        old_s = self._base_scale * self.scale
         self.scale = max(0.01, min(500.0, self.scale * factor))
         new_s = self._base_scale * self.scale
         if old_s > 1e-9 and new_s > 1e-9:
@@ -323,39 +344,32 @@ class CellMapCanvas:
             my_rel = e.y - ch / 2
             self.tx += (mx_rel / new_s - mx_rel / old_s)
             self.ty += (-(my_rel / new_s) - (-(my_rel / old_s)))
-        self._redraw()
+        self._schedule_redraw()
 
     def _on_motion(self, e):
         self._mouse_x, self._mouse_y = e.x, e.y
         wx, wy = self._s2w(e.x, e.y)
         self.coord_label.configure(text=f"({wx:.0f}, {wy:.0f})")
+
         cell = self._cell_at(e.x, e.y)
         if cell != self.hovered_cell:
             self.hovered_cell = cell
-            self._update_tooltip(e)
+            if self._tooltip:
+                self._tooltip.destroy()
+                self._tooltip = None
+            if cell:
+                tip = tk.Toplevel(self.canvas)
+                tip.wm_overrideredirect(True)
+                tip.wm_geometry(f"+{e.x_root + 12}+{e.y_root + 12}")
+                tip.attributes("-topmost", True)
+                txt = f"{cell.grid_name} {cell.short_id}\nActors: {cell.actor_count}"
+                lbl = tk.Label(tip, text=txt, bg="#333", fg="#eee", font=theme.font("sm"),
+                               padx=6, pady=3, justify=tk.LEFT)
+                lbl.pack()
+                self._tooltip = tip
 
     def _on_leave(self, e):
+        if self._tooltip:
+            self._tooltip.destroy()
+            self._tooltip = None
         self.hovered_cell = None
-        if self._tooltip:
-            self._tooltip.destroy()
-            self._tooltip = None
-        self.coord_label.configure(text="")
-
-    def _update_tooltip(self, e):
-        if self._tooltip:
-            self._tooltip.destroy()
-            self._tooltip = None
-        if not self.hovered_cell:
-            return
-        c_ = self.hovered_cell
-        self._tooltip = tk.Toplevel(self.canvas)
-        self._tooltip.wm_overrideredirect(True)
-        self._tooltip.attributes("-topmost", True)
-        cx = self.canvas.winfo_rootx() + e.x + 14
-        cy = self.canvas.winfo_rooty() + e.y + 14
-        self._tooltip.geometry(f"+{cx}+{cy}")
-        txt = f"{c_.name}\nActors: {c_.actor_count}\nL{c_.level} X{c_.grid_x} Y{c_.grid_y}"
-        if c_.always_loaded:
-            txt += "\n[Always Loaded]"
-        tk.Label(self._tooltip, text=txt, bg=theme.bg_tooltip, fg=theme.fg_bright, font=theme.font("md"),
-                 justify=tk.LEFT, padx=6, pady=3, relief=tk.SOLID, bd=1).pack()

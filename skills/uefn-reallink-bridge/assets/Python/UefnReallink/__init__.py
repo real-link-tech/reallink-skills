@@ -8,6 +8,12 @@ Auto-started by init_unreal.py on editor launch.
 Also serves as the package root for the standalone Reallink UEFN Editor GUI.
 """
 
+import os as _os
+import sys as _sys
+
+_sys.dont_write_bytecode = True
+_os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 try:
     import unreal as _unreal
     _HAS_UNREAL = True
@@ -57,9 +63,12 @@ prefix = os.path.normpath(os.path.join(os.path.dirname(sys.executable), sys.pref
 py_exe = os.path.join(prefix, 'python.exe')
 pkg_dir = os.path.dirname(os.path.abspath(__import__('UefnReallink').__file__))
 python_dir = os.path.dirname(pkg_dir)
+env = dict(os.environ)
+env['PYTHONDONTWRITEBYTECODE'] = '1'
 subprocess.Popen(
     [py_exe, '-m', 'UefnReallink.reallink_uefn_editor'],
     cwd=python_dir,
+    env=env,
     creationflags=0x08000000,
 )
 """

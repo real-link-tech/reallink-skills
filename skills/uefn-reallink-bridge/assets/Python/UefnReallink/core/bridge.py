@@ -15,7 +15,7 @@ from .common import Cell, ActorDesc
 # ─── Connection Config ────────────────────────────────────────────────────────
 
 UEFN_HOST = os.environ.get("UEFN_HOST", "127.0.0.1")
-UEFN_PORT = int(os.environ.get("UEFN_PORT", "9877"))
+UEFN_PORT = int(os.environ.get("UEFN_PORT", "19877"))
 _EXECUTE_URL = f"http://{UEFN_HOST}:{UEFN_PORT}/execute"
 _PING_URL = f"http://{UEFN_HOST}:{UEFN_PORT}/"
 
@@ -82,18 +82,44 @@ def uefn_execute(code: str) -> dict:
 
 # ─── Activate UEFN Window ─────────────────────────────────────────────────────
 
-# Python snippet executed inside UEFN to bring the editor window to foreground.
-# Append to any code that modifies viewport / selection so the UI refreshes.
-_ACTIVATE_WINDOW_SNIPPET = """
-try:
-    import ctypes as _ctypes
-    _u32 = _ctypes.WinDLL("user32", use_last_error=True)
-    _hwnd = _u32.FindWindowW(None, "Unreal Editor for Fortnite")
-    if _hwnd:
-        _u32.SetForegroundWindow(_hwnd)
-except Exception:
-    pass
-"""
+
+def _activate_uefn_window() -> None:
+    """Bring the visible UEFN window to foreground from the client process.
+
+    旧版这里不是在编辑器内调用 SetForegroundWindow，
+    而是在外部 GUI 进程里枚举窗口后激活，这样成功率更高。
+    同时通过模拟一次 Alt 键来绕过 Windows 前台切换限制。
+    """
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        user32 = ctypes.windll.user32
+        WNDENUMPROC = ctypes.WINFUNCTYPE(
+            ctypes.wintypes.BOOL,
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.LPARAM,
+        )
+        hwnd = None
+
+        def _cb(h, _):
+            nonlocal hwnd
+            if user32.IsWindowVisible(h):
+                buf = ctypes.create_unicode_buffer(512)
+                user32.GetWindowTextW(h, buf, 512)
+                title = buf.value
+                if "Unreal Editor" in title or "Unreal Editor for Fortnite" in title:
+                    hwnd = h
+                    return False
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_cb), 0)
+        if hwnd:
+            user32.keybd_event(0x12, 0, 0, 0)
+            user32.keybd_event(0x12, 0, 2, 0)
+            user32.SetForegroundWindow(hwnd)
+    except Exception:
+        pass
 
 
 def uefn_cmd(code: str, *, activate: bool = False) -> dict:
@@ -104,9 +130,10 @@ def uefn_cmd(code: str, *, activate: bool = False) -> dict:
     after execution so the editor UI refreshes immediately.
     """
     full = "import unreal\n" + code
+    resp = uefn_execute(full)
     if activate:
-        full += _ACTIVATE_WINDOW_SNIPPET
-    return uefn_execute(full)
+        _activate_uefn_window()
+    return resp
 
 
 # ─── Editor Commands ──────────────────────────────────────────────────────────
@@ -116,9 +143,12 @@ def select_and_focus(label: str):
 for a in unreal.EditorLevelLibrary.get_all_level_actors():
     if a.get_name() == {label!r}:
         unreal.EditorLevelLibrary.set_selected_level_actors([a])
-        unreal.EditorLevelLibrary.pilot_level_actor(a)
+        unreal.SystemLibrary.execute_console_command(
+            None, "CAMERA ALIGN ACTIVEVIEWPORT")
+        result = 'ok'
         break
-result = 'ok'
+else:
+    result = 'not found'
 """, activate=True)
 
 
@@ -372,6 +402,42 @@ class DepCache:
         return {k: v["tex"] for k, v in self.entries.items()
                 if "tex" in v and isinstance(v["tex"], dict)}
 
+    def build_mesh_info(self) -> dict[str, dict]:
+        return {k: v["mesh"] for k, v in self.entries.items()
+                if "mesh" in v and isinstance(v["mesh"], dict)}
+
+    def build_asset_detail(self) -> dict[str, str]:
+        """Build a human-readable detail string per asset for the Resource table."""
+        details: dict[str, str] = {}
+        for k, v in self.entries.items():
+            cls = v.get("class", "")
+            tex = v.get("tex")
+            mesh = v.get("mesh")
+            if tex and isinstance(tex, dict):
+                sx = tex.get("sx", "?")
+                sy = tex.get("sy", "?")
+                mips = tex.get("mips", 0)
+                vt = bool(tex.get("vt", False))
+                parts = [f"{sx}x{sy}"]
+                if mips:
+                    parts.append(f"{mips} mips")
+                parts.append("VT" if vt else "NonVT")
+                details[k] = " | ".join(parts)
+            elif mesh and isinstance(mesh, dict):
+                tris = int(mesh.get("tris", 0) or 0)
+                lods = int(mesh.get("lods", 0) or 0)
+                if tris >= 1000:
+                    base = f"{tris / 1000:.1f}K tris"
+                else:
+                    base = f"{tris} tris"
+                if cls == "SkeletalMesh" and lods > 0:
+                    details[k] = f"{base} | {lods} LODs"
+                else:
+                    details[k] = base
+            else:
+                details[k] = ""
+        return details
+
 
 # ─── UEFN Code Templates ────────────────────────────────────────────────────
 
@@ -496,13 +562,59 @@ for pkg in PKG_LIST:
                         __import__('math').log2(max(sx, sy))) + 1)
                     tex_info = {"sx": sx, "sy": sy, "mips": num_mips,
                                 "never_stream": ns, "lod_bias": lod_bias}
+                    try:
+                        vt = bool(asset.get_editor_property("VirtualTextureStreaming"))
+                    except Exception:
+                        try:
+                            vt = bool(asset.get_editor_property("virtual_texture_streaming"))
+                        except Exception:
+                            vt = False
+                    tex_info["vt"] = vt
+                    try:
+                        cs = str(asset.get_editor_property("CompressionSettings"))
+                        if "." in cs:
+                            cs = cs.split(".")[-1]
+                        if cs.startswith("TC_"):
+                            cs = cs[3:]
+                        tex_info["fmt"] = cs
+                    except Exception:
+                        pass
                 except Exception:
                     pass
+        mesh_info = None
+        if cls in ("StaticMesh",):
+            try:
+                tris = asset.get_num_triangles(0)
+                verts = asset.get_num_vertices(0)
+                mesh_info = {"tris": tris, "verts": verts}
+            except Exception:
+                pass
+        elif cls in ("SkeletalMesh",):
+            try:
+                tris = 0
+                verts = 0
+                try:
+                    lod_num = int(asset.get_lod_num())
+                except Exception:
+                    lod_num = 1
+                try:
+                    tris = int(asset.get_num_triangles(0))
+                except Exception:
+                    pass
+                try:
+                    verts = int(asset.get_num_vertices(0))
+                except Exception:
+                    pass
+                mesh_info = {"tris": tris, "verts": verts, "lods": lod_num}
+            except Exception:
+                pass
     except Exception:
         pass
     entry = {"deps": deps, "memory": mem, "class": cls}
     if tex_info:
         entry["tex"] = tex_info
+    if mesh_info:
+        entry["mesh"] = mesh_info
     entries[pkg] = entry
 result = entries
 '''
@@ -608,6 +720,7 @@ def estimate_streaming_memory(
     actor_bounds: dict[str, tuple],
     asset_to_actors: dict[str, set[str]] | None = None,
 ) -> tuple[int, dict[str, int]]:
+    sample_z = 0.0
     total = 0
     result: dict[str, int] = {}
 
@@ -624,10 +737,11 @@ def estimate_streaming_memory(
                 ab = actor_bounds.get(actor_label)
                 if not ab:
                     continue
-                bmin_x, bmin_y, bmax_x, bmax_y, radius = ab
+                bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z, radius = ab
                 dx = max(bmin_x - sample_x, 0.0, sample_x - bmax_x)
                 dy = max(bmin_y - sample_y, 0.0, sample_y - bmax_y)
-                d = math.hypot(dx, dy)
+                dz = max(bmin_z - sample_z, 0.0, sample_z - bmax_z)
+                d = math.sqrt(dx * dx + dy * dy + dz * dz)
                 if d < min_dist:
                     min_dist = d
                     best_radius = radius
@@ -650,18 +764,28 @@ def estimate_streaming_memory(
 
 def build_actor_bounds(actors_db: dict[str, ActorDesc],
                        cells: list[Cell]) -> dict[str, tuple]:
-    """Build {actor_label: (min_x, min_y, max_x, max_y, radius)} from ActorDesc DB."""
+    """Build actor bounds keyed by both internal name and label.
+
+    actor_resolved / asset_to_actors 这条链路用的是 CellActor.label，
+    它通常对应内部 actor name；
+    UI 展示和某些日志里又会出现 ActorDesc.label。
+    两者任意一个对不上，TextureStreaming 就会退回 full memory。
+    所以这里同时登记 name 和 label，保证都能命中。
+    """
     bounds: dict[str, tuple] = {}
     for ad in actors_db.values():
-        key = ad.label or ad.name
-        if not key:
+        if not ad.name and not ad.label:
             continue
         bmin, bmax = ad.bounds_min, ad.bounds_max
         w = abs(bmax[0] - bmin[0])
         h = abs(bmax[1] - bmin[1])
         z = abs(bmax[2] - bmin[2])
         radius = max(math.hypot(w, h, z) * 0.5, 50.0)
-        bounds[key] = (bmin[0], bmin[1], bmax[0], bmax[1], radius)
+        value = (bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2], radius)
+        if ad.name:
+            bounds[ad.name] = value
+        if ad.label:
+            bounds[ad.label] = value
     return bounds
 
 

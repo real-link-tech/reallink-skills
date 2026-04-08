@@ -54,6 +54,7 @@ class GridScanCanvas:
         self.tx = 0.0
         self.ty = 0.0
         self._base_scale = 1.0
+        self._redraw_after_id = None
         self._panning = False
         self._pan_last = (0, 0)
 
@@ -217,6 +218,18 @@ class GridScanCanvas:
                 return step
         return base * 10
 
+    def _schedule_redraw(self):
+        """Debounced redraw — coalesces rapid pan/zoom into one repaint."""
+        if self._redraw_after_id is not None:
+            self.canvas.after_cancel(self._redraw_after_id)
+        self._redraw_after_id = self.canvas.after(16, self._do_redraw)
+
+    def _do_redraw(self):
+        self._redraw_after_id = None
+        self._redraw()
+
+    _MAX_GRID_LINES = 60
+
     def _draw_background_grid(self):
         c = self.canvas
         cw = max(c.winfo_width(), 1)
@@ -236,26 +249,31 @@ class GridScanCanvas:
 
         start_x = math.floor(min_x / step) * step
         end_x = math.ceil(max_x / step) * step
+        n_x = int((end_x - start_x) / step) + 1
+        start_y = math.floor(min_y / step) * step
+        end_y = math.ceil(max_y / step) * step
+        n_y = int((end_y - start_y) / step) + 1
+
+        show_text = (n_x + n_y) < self._MAX_GRID_LINES
+
         x = start_x
         while x <= end_x + step * 0.5:
             sx, _ = self._w2s(x, 0)
             color = axis if abs(x) < step * 0.25 else minor
             width = 2 if abs(x) < step * 0.25 else 1
             c.create_line(sx, 0, sx, ch, fill=color, width=width)
-            if 0 <= sx <= cw:
+            if show_text and 0 <= sx <= cw:
                 c.create_text(sx + 2, ch - 10, text=f"{x:.0f}", fill=text,
                               anchor=tk.SW, font=theme.font("xs", mono=True))
             x += step
 
-        start_y = math.floor(min_y / step) * step
-        end_y = math.ceil(max_y / step) * step
         y = start_y
         while y <= end_y + step * 0.5:
             _, sy = self._w2s(0, y)
             color = axis if abs(y) < step * 0.25 else minor
             width = 2 if abs(y) < step * 0.25 else 1
             c.create_line(0, sy, cw, sy, fill=color, width=width)
-            if 0 <= sy <= ch:
+            if show_text and 0 <= sy <= ch:
                 c.create_text(4, sy - 2, text=f"{y:.0f}", fill=text,
                               anchor=tk.SW, font=theme.font("xs", mono=True))
             y += step
@@ -328,7 +346,7 @@ class GridScanCanvas:
                 self.tx += dx
                 self.ty += dy
                 self._pan_last = (e.x, e.y)
-                self._redraw()
+                self._schedule_redraw()
 
     def _on_scroll(self, e):
         factor = 1.15 if e.delta > 0 else 1 / 1.15
@@ -342,7 +360,7 @@ class GridScanCanvas:
             my_rel = e.y - ch / 2
             self.tx += (mx_rel / new_s - mx_rel / old_s)
             self.ty += (-(my_rel / new_s) - (-(my_rel / old_s)))
-        self._redraw()
+        self._schedule_redraw()
 
     def _on_motion(self, e):
         g = self._grid_at(e.x, e.y)
@@ -377,6 +395,7 @@ class MemoryMapCanvas:
         self.tx = 0.0
         self.ty = 0.0
         self._base_scale = 1.0
+        self._redraw_after_id = None
         self._panning = False
         self._pan_last = (0, 0)
         self._dragging = False
@@ -487,6 +506,17 @@ class MemoryMapCanvas:
                 return step
         return base * 10
 
+    def _schedule_redraw(self):
+        if self._redraw_after_id is not None:
+            self.canvas.after_cancel(self._redraw_after_id)
+        self._redraw_after_id = self.canvas.after(16, self._do_redraw)
+
+    def _do_redraw(self):
+        self._redraw_after_id = None
+        self._redraw()
+
+    _MAX_GRID_LINES = 60
+
     def _draw_background_grid(self):
         c = self.canvas
         cw = max(c.winfo_width(), 1)
@@ -500,26 +530,33 @@ class MemoryMapCanvas:
         axis = "#6a6a6a"
         text = "#8a8a8a"
 
-        x = math.floor(min_x / step) * step
+        start_x = math.floor(min_x / step) * step
         end_x = math.ceil(max_x / step) * step
+        n_x = int((end_x - start_x) / step) + 1
+        start_y = math.floor(min_y / step) * step
+        end_y = math.ceil(max_y / step) * step
+        n_y = int((end_y - start_y) / step) + 1
+
+        show_text = (n_x + n_y) < self._MAX_GRID_LINES
+
+        x = start_x
         while x <= end_x + step * 0.5:
             sx, _ = self._w2s(x, 0)
             color = axis if abs(x) < step * 0.25 else minor
             width = 2 if abs(x) < step * 0.25 else 1
             c.create_line(sx, 0, sx, ch, fill=color, width=width)
-            if 0 <= sx <= cw:
+            if show_text and 0 <= sx <= cw:
                 c.create_text(sx + 2, ch - 10, text=f"{x:.0f}", fill=text,
                               anchor=tk.SW, font=theme.font("xs", mono=True))
             x += step
 
-        y = math.floor(min_y / step) * step
-        end_y = math.ceil(max_y / step) * step
+        y = start_y
         while y <= end_y + step * 0.5:
             _, sy = self._w2s(0, y)
             color = axis if abs(y) < step * 0.25 else minor
             width = 2 if abs(y) < step * 0.25 else 1
             c.create_line(0, sy, cw, sy, fill=color, width=width)
-            if 0 <= sy <= ch:
+            if show_text and 0 <= sy <= ch:
                 c.create_text(4, sy - 2, text=f"{y:.0f}", fill=text,
                               anchor=tk.SW, font=theme.font("xs", mono=True))
             y += step
@@ -703,7 +740,7 @@ class MemoryMapCanvas:
                 self.tx += dx
                 self.ty += dy
                 self._pan_last = (e.x, e.y)
-                self._redraw()
+                self._schedule_redraw()
 
     def _on_scroll(self, e):
         factor = 1.15 if e.delta > 0 else 1 / 1.15
@@ -717,7 +754,7 @@ class MemoryMapCanvas:
             my_rel = e.y - ch / 2
             self.tx += (mx_rel / new_s - mx_rel / old_s)
             self.ty += (-(my_rel / new_s) - (-(my_rel / old_s)))
-        self._redraw()
+        self._schedule_redraw()
 
     def _on_motion(self, e):
         self._mouse_x, self._mouse_y = e.x, e.y
@@ -828,6 +865,7 @@ class MemoryTab(ttk.Frame):
         self._asset_memory: dict[str, int] = {}
         self._asset_class: dict[str, str] = {}
         self._tex_info: dict[str, dict] = {}
+        self._asset_detail: dict[str, str] = {}
         self._actor_bounds: dict[str, tuple] = {}
         self.actor_resolved: dict[str, set[str]] = {}
         self.actor_memory: dict[str, float] = {}
@@ -855,6 +893,7 @@ class MemoryTab(ttk.Frame):
         self._scan_asset_memory: dict[str, int] = {}
         self._scan_asset_class: dict[str, str] = {}
         self._scan_tex_info: dict[str, dict] = {}
+        self._scan_asset_detail: dict[str, str] = {}
         self._scan_actor_bounds: dict[str, tuple] = {}
         self._scan_asset_to_actors: dict[str, set[str]] = {}
         self._grid_memory: dict[tuple[int, int], float] = {}
@@ -993,6 +1032,7 @@ class MemoryTab(ttk.Frame):
 
         self._actor_tooltip = None
         self._actor_tooltip_data: dict[str, str] = {}
+        self._actor_real_name: dict[str, str] = {}
         self.actor_tree.bind("<Motion>", self._on_actor_motion)
         self.actor_tree.bind("<Leave>", self._on_actor_leave)
         self.actor_tree.bind("<Double-1>", self._on_actor_dblclick)
@@ -1007,10 +1047,11 @@ class MemoryTab(ttk.Frame):
         res_tree_outer = tk.Frame(right_frame, bg=theme.bg_primary)
         res_tree_outer.pack(fill=tk.BOTH, expand=True)
         self.res_tree = ttk.Treeview(res_tree_outer,
-            columns=("path", "class", "src", "memory_mb", "ref_count"),
+            columns=("path", "class", "detail", "src", "memory_mb", "ref_count"),
             show="headings", selectmode="browse")
         for col, text, w, anc in [
-            ("path", "Resource", 250, tk.W), ("class", "Class", 100, tk.W),
+            ("path", "Resource", 220, tk.W), ("class", "Class", 100, tk.W),
+            ("detail", "Detail", 120, tk.W),
             ("src", "Src", 35, tk.CENTER),
             ("memory_mb", "MB", 70, tk.E), ("ref_count", "Refs", 50, tk.CENTER),
         ]:
@@ -1069,6 +1110,7 @@ class MemoryTab(ttk.Frame):
         self._asset_memory.clear()
         self._asset_class.clear()
         self._tex_info.clear()
+        self._asset_detail.clear()
         self._actor_bounds.clear()
         self.actor_resolved.clear()
         self.actor_memory.clear()
@@ -1082,6 +1124,7 @@ class MemoryTab(ttk.Frame):
         self._scan_asset_memory.clear()
         self._scan_asset_class.clear()
         self._scan_tex_info.clear()
+        self._scan_asset_detail.clear()
         self._scan_actor_bounds.clear()
         self._scan_asset_to_actors.clear()
         self._grid_memory.clear()
@@ -1213,6 +1256,7 @@ class MemoryTab(ttk.Frame):
             "scan_asset_memory": self._scan_asset_memory,
             "scan_asset_class": self._scan_asset_class,
             "scan_tex_info": self._scan_tex_info,
+            "scan_asset_detail": self._scan_asset_detail,
             "dep_cache": self.cache.entries,
         }
 
@@ -1262,6 +1306,7 @@ class MemoryTab(ttk.Frame):
         self._scan_asset_memory = data.get("scan_asset_memory", {})
         self._scan_asset_class = data.get("scan_asset_class", {})
         self._scan_tex_info = data.get("scan_tex_info", {})
+        self._scan_asset_detail = data.get("scan_asset_detail", {})
         self._scan_actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
         self._scan_asset_to_actors = build_asset_to_actors(
             self._scan_actor_resolved)
@@ -1348,9 +1393,11 @@ class MemoryTab(ttk.Frame):
         asset_memory = self.cache.build_asset_memory()
         asset_class = self.cache.build_asset_class()
         tex_info = self.cache.build_tex_info()
+        asset_detail = self.cache.build_asset_detail()
         self._scan_asset_memory = asset_memory
         self._scan_asset_class = asset_class
         self._scan_tex_info = tex_info
+        self._scan_asset_detail = asset_detail
         self._scan_actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
 
         all_labels = set()
@@ -1419,9 +1466,11 @@ class MemoryTab(ttk.Frame):
         asset_memory = self.cache.build_asset_memory()
         asset_class = self.cache.build_asset_class()
         tex_info = self.cache.build_tex_info()
+        asset_detail = self.cache.build_asset_detail()
         self._scan_asset_memory = asset_memory
         self._scan_asset_class = asset_class
         self._scan_tex_info = tex_info
+        self._scan_asset_detail = asset_detail
         self._scan_actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
 
         scan_actor_resolved: dict[str, set[str]] = {}
@@ -1567,6 +1616,7 @@ class MemoryTab(ttk.Frame):
         self._asset_memory = self._scan_asset_memory
         self._asset_class = self._scan_asset_class
         self._tex_info = self._scan_tex_info
+        self._asset_detail = self._scan_asset_detail
         self._streaming_adjusted = effective_mem
         self._populate_cell_tree()
 
@@ -1578,7 +1628,8 @@ class MemoryTab(ttk.Frame):
             asset_memory=effective_mem,
             asset_class=self._scan_asset_class,
             cell_assets=self._scan_cell_assets,
-            raw_memory=self._scan_asset_memory if use_streaming else None)
+            raw_memory=self._scan_asset_memory if use_streaming else None,
+            asset_detail=self._scan_asset_detail)
 
         total_mb = sum(effective_mem.get(p, 0) for p in global_assets) / (1024 * 1024)
         raw_mb = sum(self._scan_asset_memory.get(p, 0)
@@ -1706,6 +1757,7 @@ class MemoryTab(ttk.Frame):
         self._asset_memory = self.cache.build_asset_memory()
         self._asset_class = self.cache.build_asset_class()
         self._tex_info = self.cache.build_tex_info()
+        self._asset_detail = self.cache.build_asset_detail()
         self._actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
         print(f"[perf] _rebuild_cache_views: {len(self.cache.entries)} entries, "
               f"{len(self._tex_info)} textures in "
@@ -1952,21 +2004,37 @@ class MemoryTab(ttk.Frame):
 
         self.actor_tree.delete(*self.actor_tree.get_children())
         self._actor_tooltip_data.clear()
+        self._actor_real_name.clear()
+
+        rows = []
         for idx, ca in enumerate(cell.actors):
             ad = self._actor_db_by_name.get(ca.label)
             cls = ""
+            display_name = ca.label
             if ad:
                 cls = ad.native_class.split(".")[-1] if ad.native_class else ""
                 if ad.base_class:
                     cls = ad.base_class.split(".")[-1]
+                if ad.label:
+                    display_name = ad.label
+                elif ad.name:
+                    display_name = ad.name
             pkg = ca.package.rsplit("/", 1)[-1] if ca.package else ""
             mem_mb = self.actor_memory.get(ca.label, 0) / (1024 * 1024)
             iid = f"a_{cell.short_id}_{idx}"
+            rows.append((mem_mb, iid, ca, ad, cls, display_name, pkg))
+
+        rows.sort(key=lambda x: x[0], reverse=True)
+
+        for mem_mb, iid, ca, ad, cls, display_name, pkg in rows:
             self.actor_tree.insert("", tk.END, iid=iid,
-                values=(ca.label, cls, pkg, f"{mem_mb:.3f}"))
+                values=(display_name, cls, pkg, f"{mem_mb:.3f}"))
+            self._actor_real_name[iid] = ca.label
             direct = self.actor_refs.get(ca.label, [])
             resolved = self.actor_resolved.get(ca.label, set())
-            tip = f"{ca.label}: {ca.path}" if ca.path else ca.label
+            tip = f"{display_name}: {ca.path}" if ca.path else display_name
+            if display_name != ca.label:
+                tip += f"\nInternal: {ca.label}"
             tip += f"\nRefs: {len(direct)} direct, {len(resolved)} total"
             self._actor_tooltip_data[iid] = tip
         self.actor_label.configure(
@@ -1999,8 +2067,8 @@ class MemoryTab(ttk.Frame):
         sel = self.actor_tree.selection()
         if not sel:
             return
-        values = self.actor_tree.item(sel[0], "values")
-        name = values[0] if values else ""
+        iid = sel[0]
+        name = self._actor_real_name.get(iid, "")
         if not name or not connection.connected:
             return
         threading.Thread(target=lambda: select_and_focus(name),
@@ -2011,13 +2079,14 @@ class MemoryTab(ttk.Frame):
     def _update_resource_table(self, cells: list[Cell], *,
                                actor_resolved=None, asset_memory=None,
                                asset_class=None, cell_assets=None,
-                               raw_memory=None):
+                               raw_memory=None, asset_detail=None):
         _actor_resolved = actor_resolved or self.actor_resolved
         _asset_memory = (asset_memory or self._streaming_adjusted
                          or self._asset_memory)
         _asset_class = asset_class or self._asset_class
         _cell_assets = cell_assets or self.cell_assets
         _raw_memory = raw_memory
+        _asset_detail = asset_detail or self._asset_detail
 
         self.res_tree.delete(*self.res_tree.get_children())
         self._res_actor_map.clear()
@@ -2049,11 +2118,12 @@ class MemoryTab(ttk.Frame):
         for mem, raw, path, actor_dict in items[:shown]:
             short_path = path.rsplit("/", 1)[-1]
             cls = _asset_class.get(path, "")
+            detail = _asset_detail.get(path, "")
             src = "FN" if not path.startswith("/RPG2") else ""
             mem_mb = mem / (1024 * 1024)
             iid = f"res_{hash(path) & 0xFFFFFFFF}"
             self.res_tree.insert("", tk.END, iid=iid,
-                values=(short_path, cls, src, f"{mem_mb:.3f}", len(actor_dict)))
+                values=(short_path, cls, detail, src, f"{mem_mb:.3f}", len(actor_dict)))
             self._res_actor_map[iid] = actor_dict
             self._res_full_path[iid] = path
             if _raw_memory and raw != mem:

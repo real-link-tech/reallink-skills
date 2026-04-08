@@ -16,6 +16,9 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 # 支持直接运行：将包的父目录加入 sys.path
 if __name__ == "__main__" and __package__ is None:
     _this_dir = os.path.dirname(os.path.abspath(__file__))
