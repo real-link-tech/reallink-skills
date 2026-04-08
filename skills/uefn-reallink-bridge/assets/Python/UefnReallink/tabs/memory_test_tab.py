@@ -938,6 +938,11 @@ class MemoryTab(ttk.Frame):
         tk.Checkbutton(top, text="Tex Streaming", variable=self._streaming_var,
                        bg=theme.bg_secondary, fg=theme.status_streaming, selectcolor=theme.bg_primary, activebackground=theme.bg_secondary,
                        activeforeground=theme.status_streaming, font=theme.font("sm"),
+                       command=self._on_streaming_toggle).pack(side=tk.LEFT, padx=(0, 4))
+        self._skip_dl_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(top, text="Skip DataLayer", variable=self._skip_dl_var,
+                       bg=theme.bg_secondary, fg=theme.fg_secondary, selectcolor=theme.bg_primary, activebackground=theme.bg_secondary,
+                       activeforeground=theme.fg_bright, font=theme.font("sm"),
                        command=self._on_streaming_toggle).pack(side=tk.LEFT, padx=(0, 8))
         tk.Button(top, text="Load", bg=theme.ctrl_bg, fg=theme.cell_text,
                   font=theme.font("sm"), relief=tk.FLAT,
@@ -1501,7 +1506,8 @@ class MemoryTab(ttk.Frame):
     def _scan_phase4(self):
         gs = self.grid_scan
         gp = self.grid_params
-        all_cells = self.all_cells
+        skip_dl = self._skip_dl_var.get()
+        all_cells = [c for c in self.all_cells if not (skip_dl and c.data_layer)]
         cell_assets_map = self._scan_cell_assets
         asset_memory = self._scan_asset_memory
         asset_class = self._scan_asset_class
@@ -1952,7 +1958,8 @@ class MemoryTab(ttk.Frame):
     def _scan_phase4_recompute(self):
         gs = self.grid_scan
         gp = self.grid_params
-        all_cells = self.all_cells
+        skip_dl = self._skip_dl_var.get()
+        all_cells = [c for c in self.all_cells if not (skip_dl and c.data_layer)]
         cell_assets_map = self._scan_cell_assets
         asset_memory = self._scan_asset_memory
         asset_class = self._scan_asset_class
