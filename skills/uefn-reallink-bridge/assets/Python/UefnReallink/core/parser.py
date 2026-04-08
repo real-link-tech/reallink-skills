@@ -12,7 +12,7 @@ _RE_ACTOR_DESC = re.compile(
     r'(?:.*?BaseClass:(\S+))?'
     r'(?:.*?NativeClass:(\S+))?'
     r'(?:.*?Name:(\S+))?'
-    r'(?:.*?Label:(\S+))?'
+    r'(?:.*?Label:(.+?)(?=\s+(?:SpatiallyLoaded|HLODRelevant|RuntimeBounds|RuntimeGrid|EditorBounds|ContentBundlePaths):|$))?'
     r'(?:.*?SpatiallyLoaded:(\w+))?'
     r'(?:.*?HLODRelevant:(\w+))?'
 )
@@ -86,8 +86,21 @@ def _compute_always_loaded_bounds(persistent_cell: Cell, cells: list[Cell]):
 def parse_log(log_path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
     actors: dict[str, ActorDesc] = {}
     cells: list[Cell] = []
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
+    with open(log_path, "rb") as f:
+        raw = f.read()
+    # UE 日志编码检测：有 BOM 用 utf-16，否则 utf-8 → gbk fallback
+    if raw[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        text = raw.decode("utf-16")
+    else:
+        for enc in ("utf-8", "gbk", "latin-1"):
+            try:
+                text = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        else:
+            text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines(keepends=True)
 
     current_cell: Cell | None = None
     persistent_cell: Cell | None = None
@@ -100,7 +113,7 @@ def parse_log(log_path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
             guid = m.group(1) or ""
             ad = ActorDesc(
                 guid=guid, base_class=m.group(2) or "", native_class=m.group(3) or "",
-                name=m.group(4) or "", label=m.group(5) or "",
+                name=m.group(4) or "", label=(m.group(5) or "").strip(),
                 spatially_loaded=(m.group(6) or "true").lower() == "true",
                 hlod_relevant=(m.group(7) or "false").lower() == "true",
             )
@@ -156,11 +169,12 @@ def parse_log(log_path: str) -> tuple[dict[str, ActorDesc], list[Cell]]:
         cm = _RE_CELL_HEADER.search(line)
         if cm:
             current_cell = Cell(name=cm.group(1), short_id=cm.group(2))
-            grid_name, level, gx, gy, _ = parse_cell_name(cm.group(1))
+            grid_name, level, gx, gy, dl = parse_cell_name(cm.group(1))
             current_cell.grid_name = grid_name
             current_cell.level = level
             current_cell.grid_x = gx
             current_cell.grid_y = gy
+            current_cell.data_layer = dl
             cells.append(current_cell)
             continue
 

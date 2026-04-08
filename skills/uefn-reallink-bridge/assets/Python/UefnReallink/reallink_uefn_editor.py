@@ -44,6 +44,7 @@ class ReallinkUefnEditor(tk.Tk):
         self.geometry("1400x900")
         self.minsize(900, 600)
         self.attributes("-topmost", True)
+        self.after(3000, lambda: self.attributes("-topmost", False))
         self.configure(bg=theme.bg_secondary)
 
         self._setup_styles()

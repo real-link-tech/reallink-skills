@@ -343,6 +343,8 @@ class DepCache:
     def __init__(self, project_name: str = ""):
         self.project = project_name
         self.entries: dict[str, dict] = {}
+        self.actor_refs: dict[str, list[str]] = {}    # key = package path
+        self.label_to_pkg: dict[str, str] = {}         # label → package path
         self._path = ""
         if project_name:
             os.makedirs(_CACHE_DIR, exist_ok=True)
@@ -357,16 +359,24 @@ class DepCache:
                     data = json.load(f)
                 if data.get("project") == self.project:
                     self.entries = data.get("entries", {})
-                    print(f"[dep_cache] Loaded {len(self.entries)} entries")
+                    self.actor_refs = data.get("actor_refs", {})
+                    self.label_to_pkg = data.get("label_to_pkg", {})
+                    print(f"[dep_cache] Loaded {len(self.entries)} entries, "
+                          f"{len(self.actor_refs)} actor_refs")
             except Exception:
                 self.entries = {}
+                self.actor_refs = {}
+                self.label_to_pkg = {}
 
     def save(self):
         if not self._path:
             return
         try:
             with open(self._path, "w", encoding="utf-8") as f:
-                json.dump({"project": self.project, "entries": self.entries},
+                json.dump({"project": self.project,
+                           "entries": self.entries,
+                           "actor_refs": self.actor_refs,
+                           "label_to_pkg": self.label_to_pkg},
                           f, ensure_ascii=False, separators=(",", ":"))
         except Exception:
             pass
@@ -425,14 +435,25 @@ class DepCache:
                 details[k] = " | ".join(parts)
             elif mesh and isinstance(mesh, dict):
                 tris = int(mesh.get("tris", 0) or 0)
+                verts = int(mesh.get("verts", 0) or 0)
                 lods = int(mesh.get("lods", 0) or 0)
-                if tris >= 1000:
-                    base = f"{tris / 1000:.1f}K tris"
+                bones = int(mesh.get("bones", 0) or 0)
+                if cls == "SkeletalMesh":
+                    parts = []
+                    if verts >= 1000:
+                        parts.append(f"{verts / 1000:.1f}K verts")
+                    elif verts > 0:
+                        parts.append(f"{verts} verts")
+                    if bones > 0:
+                        parts.append(f"{bones} bones")
+                    if lods > 0:
+                        parts.append(f"{lods} LODs")
+                    details[k] = " | ".join(parts) if parts else ""
                 else:
-                    base = f"{tris} tris"
-                if cls == "SkeletalMesh" and lods > 0:
-                    details[k] = f"{base} | {lods} LODs"
-                else:
+                    if tris >= 1000:
+                        base = f"{tris / 1000:.1f}K tris"
+                    else:
+                        base = f"{tris} tris"
                     details[k] = base
             else:
                 details[k] = ""
@@ -465,10 +486,8 @@ for label in LABELS:
         continue
     pkg = actor.get_outermost().get_path_name()
     raw = ar.get_dependencies(pkg, dep_opts)
-    if raw:
-        actor_refs[label] = [str(d) for d in raw if not str(d).startswith('/Script/')]
-    else:
-        actor_refs[label] = []
+    deps = [str(d) for d in raw if not str(d).startswith('/Script/')] if raw else []
+    actor_refs[label] = {"pkg": pkg, "deps": deps}
 result = actor_refs
 '''
 
@@ -593,19 +612,34 @@ for pkg in PKG_LIST:
             try:
                 tris = 0
                 verts = 0
+                lod_num = 0
+                bones = 0
                 try:
-                    lod_num = int(asset.get_lod_num())
+                    lod_info = asset.get_editor_property("lod_info")
+                    lod_num = len(lod_info) if lod_info else 0
                 except Exception:
-                    lod_num = 1
+                    try:
+                        lod_num = unreal.EditorSkeletalMeshLibrary.get_lod_count(asset)
+                    except Exception:
+                        lod_num = 1
                 try:
-                    tris = int(asset.get_num_triangles(0))
+                    verts = int(unreal.EditorSkeletalMeshLibrary.get_num_verts(asset, 0))
                 except Exception:
                     pass
                 try:
-                    verts = int(asset.get_num_vertices(0))
+                    sk = asset.get_editor_property("skeleton")
+                    if sk:
+                        bone_names = sk.get_editor_property("bone_tree")
+                        if bone_names:
+                            bones = len(bone_names)
                 except Exception:
-                    pass
-                mesh_info = {"tris": tris, "verts": verts, "lods": lod_num}
+                    try:
+                        sk = asset.skeleton
+                        if sk:
+                            bones = len(sk.get_bone_names()) if hasattr(sk, 'get_bone_names') else 0
+                    except Exception:
+                        pass
+                mesh_info = {"verts": verts, "lods": lod_num, "bones": bones}
             except Exception:
                 pass
     except Exception:
@@ -622,7 +656,8 @@ result = entries
 
 # ─── Fetch Functions ─────────────────────────────────────────────────────────
 
-def _fetch_actor_refs(labels: list[str]) -> dict[str, list[str]]:
+def _fetch_actor_refs(labels: list[str]) -> dict[str, dict]:
+    """Returns {label: {"pkg": str, "deps": [str, ...]}}."""
     code = _ACTOR_REFS_CODE.replace("REQUESTED_LABELS", repr(set(labels)))
     resp = uefn_cmd(code)
     if resp.get("success") and isinstance(resp.get("result"), dict):
@@ -682,12 +717,18 @@ def _tex_mip_memory(full_memory: int, num_mips: int, wanted_mip: int) -> int:
 
 
 def estimate_tex_streaming_mip(tex_info: dict, distance: float,
-                                bounds_radius: float) -> int:
+                                bounds_radius: float,
+                                is_landscape: bool = False,
+                                bounds_extent_xy: float = 0.0) -> int:
     """Estimate the mip level that would be loaded at the given distance.
 
-    Uses a simplified UE Texture Streaming heuristic:
+    For normal meshes (UE Texture Streaming heuristic):
       screen_size ≈ bounds_radius / (distance * tan(fov/2))
       wanted_mip  = log2(tex_height / (screen_size * screen_height))
+
+    For landscape components (texel-factor based):
+      texel_factor = tex_resolution / component_world_size
+      wanted_mip   = log2(tex_height / (texel_factor / distance * screen_height))
     """
     sx = tex_info.get("w", 0) or tex_info.get("sx", 0)
     sy = tex_info.get("h", 0) or tex_info.get("sy", 0)
@@ -699,13 +740,23 @@ def estimate_tex_streaming_mip(tex_info: dict, distance: float,
     if distance <= 1.0:
         return max(0, lod_bias)
 
-    fov_factor = 1.0
-    screen_size = max(bounds_radius / (distance * fov_factor), 0.001)
-    desired_screen_texels = screen_size * _SCREEN_H
+    tex_res = max(sx, sy)
+
+    if is_landscape and bounds_extent_xy > 0:
+        # Landscape: texel factor = texture resolution / component world size
+        # UE 不用 bounds sphere 推 screen size，而是直接用 UV 密度
+        texel_factor = tex_res / bounds_extent_xy
+        desired_screen_texels = (texel_factor / distance) * _SCREEN_H
+    else:
+        # Normal mesh: screen_size from bounds sphere
+        fov_factor = 1.0
+        screen_size = max(bounds_radius / (distance * fov_factor), 0.001)
+        desired_screen_texels = screen_size * _SCREEN_H
+
     if desired_screen_texels <= 0:
         return num_mips - 1
 
-    mip = max(0, int(math.log2(max(sx, sy) / desired_screen_texels)))
+    mip = max(0, int(math.log2(tex_res / desired_screen_texels)))
     mip = min(mip + lod_bias, num_mips - 1)
     return max(mip, 0)
 
@@ -719,38 +770,116 @@ def estimate_streaming_memory(
     sample_y: float,
     actor_bounds: dict[str, tuple],
     asset_to_actors: dict[str, set[str]] | None = None,
+    _precomputed: dict | None = None,
 ) -> tuple[int, dict[str, int]]:
-    sample_z = 0.0
+    """Estimate streaming memory — hot path, fully inlined for speed.
+
+    _precomputed: optional pre-built dict from precompute_tex_bounds().
+    When provided, skips per-actor iteration entirely.
+    """
     total = 0
     result: dict[str, int] = {}
+    _sqrt = math.sqrt
+    _log2 = math.log2
+    _max = max
+    _SCREEN = _SCREEN_H
+    _CLASSES = _STREAMING_TEX_CLASSES
+    _am_get = asset_memory.get
+    _ac_get = asset_class.get
+    _ti_get = tex_info_db.get
+    _pc_get = _precomputed.get if _precomputed else None
 
     for path in asset_paths:
-        full_mem = asset_memory.get(path, 0)
-        cls = asset_class.get(path, "")
-        tex = tex_info_db.get(path)
+        full_mem = _am_get(path, 0)
+        cls = _ac_get(path, "")
+        tex = _ti_get(path)
 
-        if tex and cls in _STREAMING_TEX_CLASSES and not tex.get("never_stream", False):
-            min_dist = float('inf')
-            best_radius = 100.0
-            actors = asset_to_actors.get(path, set()) if asset_to_actors else set()
-            for actor_label in actors:
-                ab = actor_bounds.get(actor_label)
-                if not ab:
-                    continue
-                bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z, radius = ab
-                dx = max(bmin_x - sample_x, 0.0, sample_x - bmax_x)
-                dy = max(bmin_y - sample_y, 0.0, sample_y - bmax_y)
-                dz = max(bmin_z - sample_z, 0.0, sample_z - bmax_z)
-                d = math.sqrt(dx * dx + dy * dy + dz * dz)
-                if d < min_dist:
-                    min_dist = d
-                    best_radius = radius
+        if tex and cls in _CLASSES and not tex.get("never_stream", False):
+            sx = tex.get("w", 0) or tex.get("sx", 0)
+            sy = tex.get("h", 0) or tex.get("sy", 0)
+            num_mips = tex.get("mips", 1)
+            lod_bias = tex.get("lod_bias", 0)
+            if sx <= 0 or sy <= 0 or num_mips <= 1:
+                result[path] = full_mem
+                total += full_mem
+                continue
 
-            if min_dist == float('inf'):
-                mem = full_mem
+            tex_res = _max(sx, sy)
+
+            # ── 用预计算的 bounds 或 fallback 到逐 actor 遍历 ──
+            pc = _pc_get(path) if _pc_get else None
+            if pc:
+                # precomputed: tuple of (bmin_x, bmin_y, bmax_x, bmax_y, radius, is_lsc, ext_xy)
+                min_dist = 1e30
+                best_radius = 100.0
+                best_is_lsc = False
+                best_ext_xy = 0.0
+                for ab in pc:
+                    dx = _max(ab[0] - sample_x, 0.0, sample_x - ab[2])
+                    dy = _max(ab[1] - sample_y, 0.0, sample_y - ab[3])
+                    d = dx * dx + dy * dy
+                    if d < min_dist:
+                        min_dist = d
+                        best_radius = ab[4]
+                        best_is_lsc = ab[5]
+                        best_ext_xy = ab[6]
+                min_dist = _sqrt(min_dist)
+                found = True
             else:
-                mip = estimate_tex_streaming_mip(tex, min_dist, best_radius)
-                mem = _tex_mip_memory(full_mem, tex.get("mips", 1), mip)
+                _ab_get = actor_bounds.get
+                _a2a_get = asset_to_actors.get if asset_to_actors else None
+                actors = _a2a_get(path, None) if _a2a_get else None
+                if not actors:
+                    result[path] = full_mem
+                    total += full_mem
+                    continue
+                min_dist = 1e30
+                best_radius = 100.0
+                best_is_lsc = False
+                best_ext_xy = 0.0
+                found = False
+                for actor_label in actors:
+                    ab = _ab_get(actor_label)
+                    if not ab:
+                        continue
+                    dx = _max(ab[0] - sample_x, 0.0, sample_x - ab[3])
+                    dy = _max(ab[1] - sample_y, 0.0, sample_y - ab[4])
+                    d = _sqrt(dx * dx + dy * dy)
+                    if d < min_dist:
+                        min_dist = d
+                        best_radius = ab[6]
+                        best_is_lsc = ab[7]
+                        best_ext_xy = ab[8]
+                        found = True
+
+            if not found or min_dist >= 1e30:
+                result[path] = full_mem
+                total += full_mem
+                continue
+
+            # ── 内联：estimate mip ──
+            if min_dist <= 1.0:
+                mip = _max(0, lod_bias)
+            else:
+                if best_is_lsc and best_ext_xy > 0:
+                    dst = (tex_res / best_ext_xy / min_dist) * _SCREEN
+                else:
+                    dst = _max(best_radius / min_dist, 0.001) * _SCREEN
+
+                if dst <= 0:
+                    mip = num_mips - 1
+                else:
+                    mip = _max(0, int(_log2(tex_res / dst)))
+                    mip = min(mip + lod_bias, num_mips - 1)
+                    mip = _max(mip, 0)
+
+            # ── 内联：_tex_mip_memory ──
+            if mip <= 0:
+                mem = full_mem
+            elif mip >= num_mips:
+                mem = _max(full_mem >> (2 * (num_mips - 1)), 1024)
+            else:
+                mem = _max(full_mem >> (2 * mip), 1024)
         else:
             mem = full_mem
 
@@ -760,7 +889,47 @@ def estimate_streaming_memory(
     return total, result
 
 
+def precompute_tex_bounds(
+    tex_info_db: dict[str, dict],
+    asset_class: dict[str, str],
+    asset_to_actors: dict[str, set[str]],
+    actor_bounds: dict[str, tuple],
+) -> dict[str, tuple]:
+    """Pre-build a flat actor-bounds tuple per streaming texture.
+
+    Returns {tex_path: ((bmin_x,bmin_y,bmax_x,bmax_y,radius,is_lsc,ext_xy), ...)}
+    Each entry is a tuple of per-actor bound tuples (XY only + metadata).
+    This eliminates dict lookups in the hot loop — just iterate a flat tuple.
+    """
+    result: dict[str, tuple] = {}
+    _ab_get = actor_bounds.get
+
+    for path, actors in asset_to_actors.items():
+        cls = asset_class.get(path, "")
+        tex = tex_info_db.get(path)
+        if not (tex and cls in _STREAMING_TEX_CLASSES and not tex.get("never_stream", False)):
+            continue
+        if not actors:
+            continue
+
+        bounds_list = []
+        for actor_label in actors:
+            ab = _ab_get(actor_label)
+            if not ab:
+                continue
+            # (bmin_x, bmin_y, bmax_x, bmax_y, radius, is_landscape, extent_xy)
+            bounds_list.append((ab[0], ab[1], ab[3], ab[4], ab[6], ab[7], ab[8]))
+
+        if bounds_list:
+            result[path] = tuple(bounds_list)
+
+    return result
+
+
 # ─── Actor Bounds / Asset-to-Actor Mapping ───────────────────────────────────
+
+_LANDSCAPE_CLASS_KEYWORDS = ("Landscape", "landscape")
+
 
 def build_actor_bounds(actors_db: dict[str, ActorDesc],
                        cells: list[Cell]) -> dict[str, tuple]:
@@ -771,6 +940,10 @@ def build_actor_bounds(actors_db: dict[str, ActorDesc],
     UI 展示和某些日志里又会出现 ActorDesc.label。
     两者任意一个对不上，TextureStreaming 就会退回 full memory。
     所以这里同时登记 name 和 label，保证都能命中。
+
+    Returns dict[str, tuple]:
+        (bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z,
+         radius, is_landscape, extent_xy)
     """
     bounds: dict[str, tuple] = {}
     for ad in actors_db.values():
@@ -781,7 +954,15 @@ def build_actor_bounds(actors_db: dict[str, ActorDesc],
         h = abs(bmax[1] - bmin[1])
         z = abs(bmax[2] - bmin[2])
         radius = max(math.hypot(w, h, z) * 0.5, 50.0)
-        value = (bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2], radius)
+
+        # 识别 Landscape 类型 actor
+        cls_str = ad.native_class or ad.base_class or ""
+        is_landscape = any(kw in cls_str for kw in _LANDSCAPE_CLASS_KEYWORDS)
+        # Landscape 用 XY extent 的较大值作为 component 世界尺寸
+        extent_xy = max(w, h) if is_landscape else 0.0
+
+        value = (bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2],
+                 radius, is_landscape, extent_xy)
         if ad.name:
             bounds[ad.name] = value
         if ad.label:
@@ -814,13 +995,55 @@ def fetch_memory_data(
     if progress_cb:
         progress_cb("actors", f"Fetching actor refs for {len(actor_labels)} actors...")
 
+    # ── Phase 1: Actor refs (用 package path 做缓存 key) ──
+    # cache.actor_refs: {package_path: [dep_paths...]}
+    # 返回值 actor_refs: {label: [dep_paths...]}（下游接口不变）
     ACTOR_BATCH = 200
     actor_refs: dict[str, list[str]] = {}
-    for i in range(0, len(actor_labels), ACTOR_BATCH):
-        batch = actor_labels[i:i + ACTOR_BATCH]
+
+    # 先收集所有 cell actor 的 label→package 映射（来自 parser 的 CellActor.package）
+    # 但这里只有 labels，没有 package 信息，所以需要通过 UEFN 查询
+    # 策略：先查哪些 label 需要请求，查完后用 pkg 做缓存 key
+    uncached_labels: list[str] = []
+    label_to_pkg: dict[str, str] = {}
+
+    # 检查 cache 里是否有 label→pkg 的映射
+    for l in actor_labels:
+        pkg = cache.label_to_pkg.get(l)
+        if pkg and pkg in cache.actor_refs:
+            actor_refs[l] = cache.actor_refs[pkg]
+            label_to_pkg[l] = pkg
+        else:
+            uncached_labels.append(l)
+
+    cached_count = len(actor_refs)
+
+    for i in range(0, len(uncached_labels), ACTOR_BATCH):
+        batch = uncached_labels[i:i + ACTOR_BATCH]
         if progress_cb:
-            progress_cb("actors", f"Actor refs {i + len(batch)}/{len(actor_labels)}...")
-        actor_refs.update(_fetch_actor_refs(batch))
+            done = cached_count + i + len(batch)
+            progress_cb("actors", f"Actor refs {done}/{len(actor_labels)} "
+                        f"(cached {cached_count})...")
+        fetched = _fetch_actor_refs(batch)
+        for label, info in fetched.items():
+            if isinstance(info, dict):
+                pkg = info.get("pkg", "")
+                deps = info.get("deps", [])
+            else:
+                # 兼容旧格式 (list)
+                pkg = ""
+                deps = info if isinstance(info, list) else []
+            actor_refs[label] = deps
+            if pkg:
+                cache.actor_refs[pkg] = deps
+                cache.label_to_pkg[label] = pkg
+                label_to_pkg[label] = pkg
+
+    if uncached_labels:
+        print(f"[perf] actor_refs: {cached_count} cached, "
+              f"{len(uncached_labels)} fetched")
+    else:
+        print(f"[perf] actor_refs: all {cached_count} cached")
 
     all_direct: set[str] = set()
     for refs in actor_refs.values():
@@ -828,6 +1051,7 @@ def fetch_memory_data(
     print(f"[perf] direct asset packages: {len(all_direct)}, cached: {len(cache.entries)}")
 
     to_query = [p for p in all_direct if p not in cache.entries]
+    queried_set: set[str] = set(to_query)   # O(1) 查重
     queue = list(to_query)
     queried_total = 0
 
@@ -836,14 +1060,14 @@ def fetch_memory_data(
         batch = queue[:DEP_BATCH]
         queue = queue[DEP_BATCH:]
         if progress_cb:
-            progress_cb("deps", f"Deps+sizes {queried_total + len(batch)}/{len(to_query) + queried_total}...")
+            progress_cb("deps", f"Deps+sizes {queried_total + len(batch)}/{len(queried_set)}...")
         result = _fetch_deps_and_sizes(batch)
         cache.merge(result)
         for pkg, info in result.items():
             for d in info.get("deps", []):
-                if d not in cache.entries and d not in to_query:
+                if d not in cache.entries and d not in queried_set:
                     queue.append(d)
-                    to_query.append(d)
+                    queried_set.add(d)
         queried_total += len(batch)
 
     t_save = time.perf_counter()

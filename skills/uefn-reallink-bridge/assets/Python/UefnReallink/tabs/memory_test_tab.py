@@ -24,6 +24,7 @@ from ..core.bridge import (
     browse_to_asset, open_asset_editor, select_and_focus,
     DepCache, _resolve_all_deps,
     estimate_streaming_memory, build_actor_bounds, build_asset_to_actors,
+    precompute_tex_bounds,
     _STREAMING_TEX_CLASSES,
 )
 
@@ -1223,6 +1224,8 @@ class MemoryTab(ttk.Frame):
 
     def _clear_cache(self):
         self.cache.entries.clear()
+        self.cache.actor_refs.clear()
+        self.cache.label_to_pkg.clear()
         self.cache.save()
         self.status_label.configure(text="Cache cleared", fg=theme.action_gold_fg)
 
@@ -1514,34 +1517,109 @@ class MemoryTab(ttk.Frame):
         grid_memory: dict[tuple[int, int], float] = {}
         grid_cells: dict[tuple[int, int], list] = {}
 
+        # ── 预分离：每个 cell 的固定资产集合 vs streaming 纹理集合 ──
+        cell_fixed_assets: dict[str, set[str]] = {}
+        cell_streaming_assets: dict[str, set[str]] = {}
+        if use_streaming and tex_info:
+            for sid, assets in cell_assets_map.items():
+                fixed = set()
+                streaming = set()
+                for p in assets:
+                    cls = asset_class.get(p, "")
+                    t = tex_info.get(p)
+                    if t and cls in _STREAMING_TEX_CLASSES and not t.get("never_stream", False):
+                        streaming.add(p)
+                    else:
+                        fixed.add(p)
+                cell_fixed_assets[sid] = fixed
+                cell_streaming_assets[sid] = streaming
+
+        # 预计算每张 streaming 纹理的合并 AABB（消除内层 actor 循环）
+        tex_bounds_pc = None
+        if use_streaming and tex_info and asset_to_actors:
+            tex_bounds_pc = precompute_tex_bounds(
+                tex_info, asset_class, asset_to_actors, actor_bounds)
+
         def _bg():
             t0 = time.perf_counter()
             done = 0
+            last_update = t0
+
+            # ── 预计算：always loaded vs spatial cells ──
+            always_loaded_cells = [c for c in all_cells if c.always_loaded]
+            spatial_cells = [c for c in all_cells if not c.always_loaded and c.spatially_loaded]
+
+            # 预计算 grid → loaded cells 映射（跳过无 spatial cell 的 grid）
+            grid_loaded: dict[tuple[int, int], list] = {}
             for gy in range(gs.grid_ny):
                 for gx in range(gs.grid_nx):
                     cx, cy = gs.grid_center(gx, gy)
-                    loaded = [c for c in all_cells if is_cell_loaded(c, cx, cy, gp)]
+                    loaded = list(always_loaded_cells)
+                    for c in spatial_cells:
+                        if is_cell_loaded(c, cx, cy, gp):
+                            loaded.append(c)
                     spatial = [c for c in loaded if not c.always_loaded]
-                    if not spatial:
-                        done += 1
-                        continue
-                    merged: set[str] = set()
+                    if spatial:
+                        grid_loaded[(gx, gy)] = loaded
+
+            # ── 预计算 always loaded 部分（所有 grid 共享） ──
+            use_s = use_streaming and tex_info
+            if use_s:
+                always_fixed: set[str] = set()
+                always_streaming: set[str] = set()
+                for c in always_loaded_cells:
+                    sid = c.short_id
+                    always_fixed |= cell_fixed_assets.get(sid, set())
+                    always_streaming |= cell_streaming_assets.get(sid, set())
+                always_fixed_mem = sum(asset_memory.get(p, 0) for p in always_fixed)
+            else:
+                always_merged: set[str] = set()
+                for c in always_loaded_cells:
+                    always_merged |= cell_assets_map.get(c.short_id, set())
+                always_fixed_mem = sum(asset_memory.get(p, 0) for p in always_merged)
+                always_fixed = always_merged
+                always_streaming = set()
+
+            for (gx, gy), loaded in grid_loaded.items():
+                cx, cy = gs.grid_center(gx, gy)
+
+                if use_s:
+                    merged_fixed = set(always_fixed)
+                    merged_streaming = set(always_streaming)
                     for cell in loaded:
+                        if cell.always_loaded:
+                            continue
+                        sid = cell.short_id
+                        merged_fixed |= cell_fixed_assets.get(sid, set())
+                        merged_streaming |= cell_streaming_assets.get(sid, set())
+                    extra_fixed = merged_fixed - always_fixed
+                    fixed_total = always_fixed_mem + sum(
+                        asset_memory.get(p, 0) for p in extra_fixed)
+                    streaming_mem, _ = estimate_streaming_memory(
+                        merged_streaming, asset_memory, asset_class, tex_info,
+                        cx, cy, actor_bounds, asset_to_actors,
+                        _precomputed=tex_bounds_pc)
+                    mem_total = fixed_total + streaming_mem
+                else:
+                    merged = set(always_fixed)
+                    for cell in loaded:
+                        if cell.always_loaded:
+                            continue
                         merged |= cell_assets_map.get(cell.short_id, set())
+                    extra = merged - always_fixed
+                    mem_total = always_fixed_mem + sum(
+                        asset_memory.get(p, 0) for p in extra)
 
-                    if use_streaming and tex_info:
-                        mem_total, _ = estimate_streaming_memory(
-                            merged, asset_memory, asset_class, tex_info,
-                            cx, cy, actor_bounds, asset_to_actors)
-                    else:
-                        mem_total = sum(asset_memory.get(p, 0) for p in merged)
+                grid_memory[(gx, gy)] = mem_total
+                grid_cells[(gx, gy)] = loaded
+                done += 1
 
-                    grid_memory[(gx, gy)] = mem_total
-                    grid_cells[(gx, gy)] = loaded
-                    done += 1
-                row_done = done
-                self.after(0, lambda d=row_done: self.status_label.configure(
-                    text=f"[Scan 4/4] Computing {d}/{total} grids..."))
+                now = time.perf_counter()
+                if now - last_update >= 0.5:
+                    last_update = now
+                    row_done = done
+                    self.after(0, lambda d=row_done: self.status_label.configure(
+                        text=f"[Scan 4/4] Computing {d}/{len(grid_loaded)} grids..."))
 
             dt = time.perf_counter() - t0
             tag = " (streaming)" if use_streaming else ""
@@ -1887,39 +1965,112 @@ class MemoryTab(ttk.Frame):
         tag = " (streaming)" if use_streaming else " (raw)"
         self._set_busy(True, f"Recomputing{tag} 0/{total} grids...", theme.status_streaming)
 
+        # ── 预分离：每个 cell 的固定资产集合 vs streaming 纹理集合 ──
+        cell_fixed_assets: dict[str, set[str]] = {}
+        cell_streaming_assets: dict[str, set[str]] = {}
+        if use_streaming:
+            for sid, assets in cell_assets_map.items():
+                fixed = set()
+                streaming = set()
+                for p in assets:
+                    cls = asset_class.get(p, "")
+                    t = tex_info.get(p)
+                    if t and cls in _STREAMING_TEX_CLASSES and not t.get("never_stream", False):
+                        streaming.add(p)
+                    else:
+                        fixed.add(p)
+                cell_fixed_assets[sid] = fixed
+                cell_streaming_assets[sid] = streaming
+
+        # 预计算每张 streaming 纹理的合并 AABB
+        tex_bounds_pc = None
+        if use_streaming and asset_to_actors:
+            tex_bounds_pc = precompute_tex_bounds(
+                tex_info, asset_class, asset_to_actors, actor_bounds)
+
         def _bg():
             t0 = time.perf_counter()
             grid_memory: dict[tuple[int, int], float] = {}
             grid_cells: dict[tuple[int, int], list] = {}
             done = 0
+            last_update = t0
 
+            # ── 预计算：每个 cell 覆盖哪些 grid ──
+            # always_loaded 的 cell 覆盖所有 grid
+            always_loaded_cells = [c for c in all_cells if c.always_loaded]
+            spatial_cells = [c for c in all_cells if not c.always_loaded and c.spatially_loaded]
+
+            # 为每个 grid 预计算 loaded cells
+            grid_loaded: dict[tuple[int, int], list] = {}
             for gy in range(gs.grid_ny):
                 for gx in range(gs.grid_nx):
                     cx, cy = gs.grid_center(gx, gy)
-                    loaded = [c for c in all_cells
-                              if is_cell_loaded(c, cx, cy, gp)]
+                    loaded = list(always_loaded_cells)
+                    for c in spatial_cells:
+                        if is_cell_loaded(c, cx, cy, gp):
+                            loaded.append(c)
                     spatial = [c for c in loaded if not c.always_loaded]
-                    if not spatial:
-                        done += 1
-                        continue
-                    merged: set[str] = set()
+                    if spatial:
+                        grid_loaded[(gx, gy)] = loaded
+
+            # ── 预计算：always loaded cells 的固定/streaming 资产 ──
+            always_fixed: set[str] = set()
+            always_streaming: set[str] = set()
+            if use_streaming:
+                for c in always_loaded_cells:
+                    sid = c.short_id
+                    always_fixed |= cell_fixed_assets.get(sid, set())
+                    always_streaming |= cell_streaming_assets.get(sid, set())
+                always_fixed_mem = sum(asset_memory.get(p, 0) for p in always_fixed)
+            else:
+                always_merged: set[str] = set()
+                for c in always_loaded_cells:
+                    always_merged |= cell_assets_map.get(c.short_id, set())
+                always_fixed_mem = sum(asset_memory.get(p, 0) for p in always_merged)
+                always_fixed = always_merged
+
+            for (gx, gy), loaded in grid_loaded.items():
+                cx, cy = gs.grid_center(gx, gy)
+
+                if use_streaming:
+                    merged_fixed = set(always_fixed)
+                    merged_streaming = set(always_streaming)
                     for cell in loaded:
+                        if cell.always_loaded:
+                            continue
+                        sid = cell.short_id
+                        merged_fixed |= cell_fixed_assets.get(sid, set())
+                        merged_streaming |= cell_streaming_assets.get(sid, set())
+                    # 增量：只对 spatial cells 新增的 fixed 资产求和
+                    extra_fixed = merged_fixed - always_fixed
+                    fixed_total = always_fixed_mem + sum(
+                        asset_memory.get(p, 0) for p in extra_fixed)
+                    streaming_mem, _ = estimate_streaming_memory(
+                        merged_streaming, asset_memory, asset_class, tex_info,
+                        cx, cy, actor_bounds, asset_to_actors,
+                        _precomputed=tex_bounds_pc)
+                    mem_total = fixed_total + streaming_mem
+                else:
+                    merged = set(always_fixed)
+                    for cell in loaded:
+                        if cell.always_loaded:
+                            continue
                         merged |= cell_assets_map.get(cell.short_id, set())
+                    extra = merged - always_fixed
+                    mem_total = always_fixed_mem + sum(
+                        asset_memory.get(p, 0) for p in extra)
 
-                    if use_streaming and tex_info:
-                        mem_total, _ = estimate_streaming_memory(
-                            merged, asset_memory, asset_class, tex_info,
-                            cx, cy, actor_bounds, asset_to_actors)
-                    else:
-                        mem_total = sum(asset_memory.get(p, 0) for p in merged)
+                grid_memory[(gx, gy)] = mem_total
+                grid_cells[(gx, gy)] = loaded
+                done += 1
 
-                    grid_memory[(gx, gy)] = mem_total
-                    grid_cells[(gx, gy)] = loaded
-                    done += 1
-                row_done = done
-                self.after(0, lambda d=row_done:
-                    self.status_label.configure(
-                        text=f"Recomputing{tag} {d}/{total} grids..."))
+                now = time.perf_counter()
+                if now - last_update >= 0.5:
+                    last_update = now
+                    row_done = done
+                    self.after(0, lambda d=row_done:
+                        self.status_label.configure(
+                            text=f"Recomputing{tag} {d}/{len(grid_loaded)} grids..."))
 
             dt = time.perf_counter() - t0
             print(f"[toggle] Recompute{tag}: {dt*1000:.0f}ms, "
@@ -2098,10 +2249,15 @@ class MemoryTab(ttk.Frame):
         for cell in cells:
             merged_assets |= _cell_assets.get(cell.short_id, set())
             for ca in cell.actors:
+                # 尝试从 ActorDesc 获取 display label
+                ad = self._actor_db_by_name.get(ca.label)
+                display = (ad.label if ad and ad.label else ca.label)
                 for path in _actor_resolved.get(ca.label, set()):
                     if path not in actor_of_asset:
                         actor_of_asset[path] = {}
-                    actor_of_asset[path][ca.label] = ca.path
+                    # key = internal name (用于 select_and_focus)
+                    # value = display label (用于菜单显示)
+                    actor_of_asset[path][ca.label] = display
 
         total = 0
         raw_total = 0
@@ -2224,11 +2380,12 @@ class MemoryTab(ttk.Frame):
                                  activebackground=theme.ctrl_hover,
                                  activeforeground=theme.fg_bright,
                                  font=theme.font("md"))
-            for label in sorted(actor_dict.keys())[:50]:
+            for actor_name in sorted(actor_dict.keys())[:50]:
+                display = actor_dict.get(actor_name, actor_name)
                 actor_menu.add_command(
-                    label=label,
+                    label=display,
                     state=tk.DISABLED if offline else tk.NORMAL,
-                    command=lambda l=label: threading.Thread(
+                    command=lambda l=actor_name: threading.Thread(
                         target=lambda: select_and_focus(l),
                         daemon=True).start())
             if len(actor_dict) > 50:
