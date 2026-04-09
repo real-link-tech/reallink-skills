@@ -11,14 +11,14 @@ metadata:
 
 # UefnReallink Bridge
 
-通过 HTTP 桥接与运行中的 UEFN 编辑器通信。编辑器启动时自动在 `127.0.0.1:9877` 监听。你发送 Python 代码，编辑器在主线程执行并返回结果。
+通过 HTTP 桥接与运行中的 UEFN 编辑器通信。编辑器启动时自动在 `127.0.0.1:19877` 监听。你发送 Python 代码，编辑器在主线程执行并返回结果。
 
 ## 前置条件检查
 
 每次会话首次使用时，先检测编辑器插件是否可用：
 
 ```powershell
-curl -s http://127.0.0.1:9877/ 2>$null
+curl -s http://127.0.0.1:19877/ 2>$null
 ```
 
 - **连接成功** → 直接使用
@@ -43,7 +43,7 @@ result = [a.get_name() for a in actors]
 ## 协议
 
 ```
-POST http://127.0.0.1:9877/execute
+POST http://127.0.0.1:19877/execute
 Content-Type: text/plain
 
 <Python 代码>
@@ -60,7 +60,7 @@ Content-Type: text/plain
 ### 健康检查
 
 ```
-GET http://127.0.0.1:9877/
+GET http://127.0.0.1:19877/
 ```
 
 ## 核心规则

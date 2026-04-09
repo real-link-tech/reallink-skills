@@ -1024,11 +1024,13 @@ class MemoryTab(ttk.Frame):
         actor_tree_outer = tk.Frame(actor_section, bg=theme.bg_primary)
         actor_tree_outer.pack(fill=tk.BOTH, expand=True)
         self.actor_tree = ttk.Treeview(actor_tree_outer,
-            columns=("name", "class", "package", "memory_mb"),
+            columns=("name", "class", "package", "streaming", "radius", "memory_mb"),
             show="headings", selectmode="browse")
         for col, text, w, anc in [
-            ("name", "Name", 180, tk.W), ("class", "Class", 140, tk.W),
-            ("package", "Package", 140, tk.W), ("memory_mb", "MB", 60, tk.E),
+            ("name", "Name", 160, tk.W), ("class", "Class", 120, tk.W),
+            ("package", "Package", 100, tk.W), ("streaming", "Streaming", 130, tk.W),
+            ("radius", "Radius", 60, tk.E),
+            ("memory_mb", "MB", 55, tk.E),
         ]:
             self.actor_tree.heading(col, text=text)
             self.actor_tree.column(col, width=w, anchor=anc)
@@ -1045,6 +1047,8 @@ class MemoryTab(ttk.Frame):
         self.actor_tree.bind("<Motion>", self._on_actor_motion)
         self.actor_tree.bind("<Leave>", self._on_actor_leave)
         self.actor_tree.bind("<Double-1>", self._on_actor_dblclick)
+        self.actor_tree.bind("<Button-3>", self._on_actor_rightclick)
+        self.actor_tree.bind("<<TreeviewSelect>>", self._on_actor_select)
 
         right_frame = tk.Frame(mid, bg=theme.bg_secondary)
         mid.add(right_frame, stretch="always")
@@ -1237,7 +1241,54 @@ class MemoryTab(ttk.Frame):
         self.cache.actor_refs.clear()
         self.cache.label_to_pkg.clear()
         self.cache.save()
-        self.status_label.configure(text="Cache cleared", fg=theme.action_gold_fg)
+
+        # Also clear parsed streaming-generation data so next Refresh
+        # will trigger a fresh wp.Editor.DumpStreamingGenerationLog.
+        self.actors_db.clear()
+        self.all_cells.clear()
+        self._cell_map_dict.clear()
+        self._actor_db_by_name.clear()
+        self.actor_refs.clear()
+        self._dep_graph.clear()
+        self._asset_memory.clear()
+        self._asset_class.clear()
+        self._tex_info.clear()
+        self._asset_detail.clear()
+        self._actor_bounds.clear()
+        self._landscape_component_bounds.clear()
+        self.actor_resolved.clear()
+        self.actor_memory.clear()
+        self.cell_assets.clear()
+        self.cell_memory.clear()
+        self.global_assets.clear()
+        self._streaming_adjusted.clear()
+        self._scan_actor_refs.clear()
+        self._scan_actor_resolved.clear()
+        self._scan_cell_assets.clear()
+        self._scan_asset_memory.clear()
+        self._scan_asset_class.clear()
+        self._scan_tex_info.clear()
+        self._scan_asset_detail.clear()
+        self._scan_actor_bounds.clear()
+        self._scan_landscape_component_bounds.clear()
+        self._scan_asset_to_actors.clear()
+        self._grid_memory.clear()
+        self._grid_cells.clear()
+
+        self.grid_scan.grid_memory.clear()
+        self.grid_scan.selected = None
+        self.grid_scan._redraw()
+        self.mem_map.loaded_cells = []
+        self.mem_map.cell_memory.clear()
+        self.mem_map.fit_view()
+
+        self.cell_tree.delete(*self.cell_tree.get_children())
+        self.actor_tree.delete(*self.actor_tree.get_children())
+        self.res_tree.delete(*self.res_tree.get_children())
+
+        self.status_label.configure(
+            text="All caches cleared — click Refresh to re-dump",
+            fg=theme.action_gold_fg)
 
     # ── Save / Load Scan Data ────────────────────────────────────────────────
 
@@ -2201,6 +2252,43 @@ class MemoryTab(ttk.Frame):
             self.cell_tree.selection_set(children[0])
             self._on_cell_select(None)
 
+    # ── Streaming classification ──────────────────────────────────────────────
+
+    @staticmethod
+    def _classify_actor_streaming(cell: Cell, ad: ActorDesc | None) -> str:
+        """Return a short human-readable streaming status for an actor.
+
+        Classification based on UE WorldPartition source:
+        - ActorDesc.SpatiallyLoaded already accounts for bounds validity
+          and component overrides (e.g. DirectionalLight forces non-spatial).
+        - Cell.always_loaded = PersistentLevel (non-spatial, no DataLayer,
+          no ContentBundle).
+        - Cell.data_layer = actor is gated by a DataLayer.
+        - A spatial actor landing in an always-loaded cell was *forced*
+          non-spatial by the streaming generation (reference mismatch,
+          level-script ref, parent container non-spatial, etc.).
+        """
+        if ad is None:
+            return "?"
+        if ad.spatially_loaded:
+            # Actor 本身标记为空间加载
+            if cell.always_loaded:
+                # 被强制拉到 PersistentLevel（引用关系 / 父容器等）
+                return "⚠ → Always"
+            if cell.data_layer:
+                return "DataLayer"
+            if cell.spatially_loaded:
+                return "Streaming"
+            # 非空间 Cell 但 Actor 标记空间 — 异常
+            return "⚠ NonSpatial"
+        else:
+            # Actor 未标记空间加载
+            if cell.always_loaded:
+                return "Always"
+            if cell.data_layer:
+                return "DL (static)"
+            return "Not Spatial"
+
     def _on_cell_select(self, e):
         sel = self.cell_tree.selection()
         if not sel:
@@ -2227,15 +2315,28 @@ class MemoryTab(ttk.Frame):
                 elif ad.name:
                     display_name = ad.name
             pkg = ca.package.rsplit("/", 1)[-1] if ca.package else ""
+            radius_str = ""
+            if ad:
+                bmin, bmax = ad.bounds_min, ad.bounds_max
+                if bmin != (0, 0, 0) or bmax != (0, 0, 0):
+                    dx = (bmax[0] - bmin[0]) / 2
+                    dy = (bmax[1] - bmin[1]) / 2
+                    dz = (bmax[2] - bmin[2]) / 2
+                    r = (dx*dx + dy*dy + dz*dz) ** 0.5
+                    radius_str = f"{r:.0f}" if r >= 1 else f"{r:.1f}"
+            # ── Streaming status ──
+            streaming_str = self._classify_actor_streaming(cell, ad)
             mem_mb = self.actor_memory.get(ca.label, 0) / (1024 * 1024)
             iid = f"a_{cell.short_id}_{idx}"
-            rows.append((mem_mb, iid, ca, ad, cls, display_name, pkg))
+            rows.append((mem_mb, iid, ca, ad, cls, display_name, pkg,
+                         streaming_str, radius_str))
 
         rows.sort(key=lambda x: x[0], reverse=True)
 
-        for mem_mb, iid, ca, ad, cls, display_name, pkg in rows:
+        for mem_mb, iid, ca, ad, cls, display_name, pkg, streaming_str, radius_str in rows:
             self.actor_tree.insert("", tk.END, iid=iid,
-                values=(display_name, cls, pkg, f"{mem_mb:.3f}"))
+                values=(display_name, cls, pkg, streaming_str, radius_str,
+                        f"{mem_mb:.3f}"))
             self._actor_real_name[iid] = ca.label
             direct = self.actor_refs.get(ca.label, [])
             resolved = self.actor_resolved.get(ca.label, set())
@@ -2280,6 +2381,112 @@ class MemoryTab(ttk.Frame):
             return
         threading.Thread(target=lambda: select_and_focus(name),
                          daemon=True).start()
+
+    def _on_actor_select(self, e):
+        """When an actor is selected, filter the resource table to that actor."""
+        sel = self.actor_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        name = self._actor_real_name.get(iid, "")
+        if not name:
+            return
+
+        resolved = self.actor_resolved.get(name, set())
+        if not resolved:
+            self.res_tree.delete(*self.res_tree.get_children())
+            self._res_actor_map.clear()
+            self._res_full_path.clear()
+            self._res_raw_mem = {}
+            self.total_label.configure(text=f"No resources for this actor")
+            self.stats_chart.update(set(), {}, {})
+            return
+
+        _asset_memory = self._streaming_adjusted or self._asset_memory
+        _asset_class = self._asset_class
+        _asset_detail = self._asset_detail
+
+        self.res_tree.delete(*self.res_tree.get_children())
+        self._res_actor_map.clear()
+        self._res_full_path.clear()
+        self._res_raw_mem = {}
+
+        ad = self._actor_db_by_name.get(name)
+        display = (ad.label if ad and ad.label else name)
+
+        total = 0
+        items = []
+        for path in resolved:
+            mem = _asset_memory.get(path, 0)
+            total += mem
+            items.append((mem, path))
+
+        items.sort(key=lambda x: x[0], reverse=True)
+        for mem, path in items[:self._RES_TABLE_MAX]:
+            short_path = path.rsplit("/", 1)[-1]
+            cls = _asset_class.get(path, "")
+            detail = _asset_detail.get(path, "")
+            src = "FN" if not path.startswith("/RPG2") else ""
+            mem_mb = mem / (1024 * 1024)
+            iid_r = f"res_{hash(path) & 0xFFFFFFFF}"
+            self.res_tree.insert("", tk.END, iid=iid_r,
+                values=(short_path, cls, detail, src, f"{mem_mb:.3f}", ""))
+            self._res_full_path[iid_r] = path
+
+        total_mb = total / (1024 * 1024)
+        suffix = (f" (top {self._RES_TABLE_MAX})"
+                  if len(items) > self._RES_TABLE_MAX else "")
+        self.total_label.configure(
+            text=f"{display}: {total_mb:.3f} MB  |  "
+                 f"{len(items)} resources{suffix}")
+
+        # Update stats chart for this single actor's resources
+        self.stats_chart.update(resolved, _asset_memory, _asset_class)
+
+    def _on_actor_rightclick(self, e):
+        row = self.actor_tree.identify_row(e.y)
+        if not row:
+            return
+        self.actor_tree.selection_set(row)
+        name = self._actor_real_name.get(row, "")
+        if not name:
+            return
+
+        menu = tk.Menu(self, tearoff=0, bg=theme.ctrl_bg, fg=theme.fg_primary,
+                       activebackground=theme.ctrl_hover, activeforeground=theme.fg_bright,
+                       font=theme.font("md"))
+
+        offline = not connection.connected
+        menu.add_command(label="Select & Focus",
+                         state=tk.DISABLED if offline else tk.NORMAL,
+                         command=lambda: threading.Thread(
+                             target=lambda: select_and_focus(name),
+                             daemon=True).start())
+
+        # Show referenced assets as submenu
+        refs = self.actor_resolved.get(name, set())
+        if refs:
+            ref_menu = tk.Menu(menu, tearoff=0, bg=theme.ctrl_bg, fg=theme.fg_primary,
+                               activebackground=theme.ctrl_hover,
+                               activeforeground=theme.fg_bright,
+                               font=theme.font("md"))
+            for ref_path in sorted(refs)[:30]:
+                short = ref_path.rsplit("/", 1)[-1]
+                ref_menu.add_command(
+                    label=short,
+                    state=tk.DISABLED if offline else tk.NORMAL,
+                    command=lambda p=ref_path: threading.Thread(
+                        target=lambda: browse_to_asset(p),
+                        daemon=True).start())
+            if len(refs) > 30:
+                ref_menu.add_command(
+                    label=f"... +{len(refs) - 30} more",
+                    state=tk.DISABLED)
+            menu.add_cascade(label=f"Browse Ref ({len(refs)})",
+                             menu=ref_menu)
+
+        menu.tk_popup(e.x_root, e.y_root)
+        menu.grab_release()
 
     _RES_TABLE_MAX = 500
 
@@ -2405,6 +2612,51 @@ class MemoryTab(ttk.Frame):
         threading.Thread(target=lambda: browse_to_asset(path),
                          daemon=True).start()
 
+    def _find_ref_chain(self, actor_label: str, target_path: str) -> list[str]:
+        """BFS from actor's direct refs through _dep_graph to target_path.
+
+        Returns the chain as [actor_label, ref1, ref2, ..., target_path].
+        Empty list if no path found.
+        """
+        direct = self.actor_refs.get(actor_label, [])
+        # Fallback: try cache if self.actor_refs is empty
+        if not direct:
+            pkg = self.cache.label_to_pkg.get(actor_label, "")
+            if pkg:
+                direct = self.cache.actor_refs.get(pkg, [])
+        if not direct:
+            return []
+        if target_path in direct:
+            return [actor_label, target_path]
+
+        graph = self._dep_graph
+        # Fallback: try cache dep graph
+        if not graph:
+            graph = self.cache.build_dep_graph() if hasattr(self.cache, 'build_dep_graph') else {}
+        visited: set[str] = set(direct)
+        # parent map: child → parent
+        parent: dict[str, str] = {d: actor_label for d in direct}
+        queue = deque(direct)
+
+        while queue:
+            node = queue.popleft()
+            for child in graph.get(node, []):
+                if child in visited:
+                    continue
+                visited.add(child)
+                parent[child] = node
+                if child == target_path:
+                    # reconstruct
+                    chain = [child]
+                    cur = child
+                    while cur in parent:
+                        cur = parent[cur]
+                        chain.append(cur)
+                    chain.reverse()
+                    return chain
+                queue.append(child)
+        return []
+
     def _on_res_rightclick(self, e):
         row = self.res_tree.identify_row(e.y)
         if not row:
@@ -2430,6 +2682,37 @@ class MemoryTab(ttk.Frame):
                          command=lambda: threading.Thread(
                              target=lambda: open_asset_editor(path),
                              daemon=True).start())
+
+        # Inline ref chain when a single actor is selected
+        actor_sel = self.actor_tree.selection()
+        if actor_sel:
+            sel_actor = self._actor_real_name.get(actor_sel[0], "")
+            if sel_actor and self.actor_resolved.get(sel_actor):
+                chain = self._find_ref_chain(sel_actor, path)
+                if chain and len(chain) > 1:
+                    menu.add_separator()
+                    _ac = self._asset_class
+                    _am = self._streaming_adjusted or self._asset_memory
+                    ad = self._actor_db_by_name.get(sel_actor)
+                    actor_disp = (ad.label if ad and ad.label else sel_actor)
+                    menu.add_command(
+                        label=f"🎭 {actor_disp}",
+                        command=(lambda a=sel_actor: threading.Thread(
+                            target=lambda: select_and_focus(a),
+                            daemon=True).start()) if not offline else (lambda: None))
+                    for i, p in enumerate(chain[1:], 1):
+                        short = p.rsplit("/", 1)[-1]
+                        cls = _ac.get(p, "")
+                        mem = _am.get(p, 0)
+                        mem_s = f"  {mem/(1024*1024):.3f}MB" if mem else ""
+                        cls_s = f" [{cls}]" if cls else ""
+                        arrow = "└─" if i == len(chain) - 1 else "├─"
+                        indent = "    " * (i - 1)
+                        menu.add_command(
+                            label=f"{indent}{arrow} {short}{cls_s}{mem_s}",
+                            command=(lambda asset_path=p: threading.Thread(
+                                target=lambda: browse_to_asset(asset_path),
+                                daemon=True).start()) if not offline else (lambda: None))
 
         if actor_dict:
             actor_menu = tk.Menu(menu, tearoff=0, bg=theme.ctrl_bg, fg=theme.fg_primary,

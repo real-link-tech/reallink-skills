@@ -84,7 +84,7 @@ New-Item -ItemType Junction -Path $pkg -Target "$src\UefnReallink"
 如果 UEFN 编辑器正在运行，执行：
 
 ```powershell
-curl -s http://127.0.0.1:9877/
+curl -s http://127.0.0.1:19877/
 ```
 
 - **返回 `"status": "ok"`** → 插件已在线，跳到第 4 步
@@ -98,7 +98,7 @@ p=r"<UEFN_PROJECT>/Content/Python";import sys,os;sys.path.insert(0,p) if p not i
 
 ```
 [LOADER] 1 package(s) registered: UefnReallink
-[UefnReallink] Ready on http://127.0.0.1:9877
+[UefnReallink] Ready on http://127.0.0.1:19877
 [UefnReallink] Toolbar button 'Reallink' injected
 ```
 

@@ -17,6 +17,9 @@ import os
 import importlib
 import unreal
 
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 _PYTHON_DIR = os.path.dirname(os.path.abspath(__file__))
 
 if _PYTHON_DIR not in sys.path:

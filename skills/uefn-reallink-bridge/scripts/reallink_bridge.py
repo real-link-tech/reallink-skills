@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 HOST    = os.environ.get("UEFN_HOST", "127.0.0.1")
-PORT    = int(os.environ.get("UEFN_PORT", "9877"))
+PORT    = int(os.environ.get("UEFN_PORT", "19877"))
 TIMEOUT = float(os.environ.get("UEFN_TIMEOUT", "30"))
 
 

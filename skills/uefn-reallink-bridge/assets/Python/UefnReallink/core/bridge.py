@@ -282,14 +282,9 @@ def is_cell_loaded(cell: Cell, cam_x: float, cam_y: float, grid_params: dict) ->
 
 def browse_to_asset(path: str):
     return uefn_cmd(f"""
-ar = unreal.AssetRegistryHelpers.get_asset_registry()
-ad = ar.get_asset_by_object_path({path!r})
-if ad.is_valid():
-    unreal.AssetToolsHelpers.get_asset_tools().sync_browser_to_objects([ad.get_full_name()])
-else:
-    obj = unreal.load_asset({path!r})
-    if obj:
-        unreal.AssetToolsHelpers.get_asset_tools().sync_browser_to_objects([obj.get_path_name()])
+obj = unreal.load_asset({path!r})
+if obj:
+    unreal.EditorAssetLibrary.sync_browser_to_objects([obj.get_path_name()])
 result = 'ok'
 """, activate=True)
 
