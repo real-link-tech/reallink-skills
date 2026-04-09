@@ -491,6 +491,70 @@ for label in LABELS:
 result = actor_refs
 '''
 
+_LANDSCAPE_COMPONENT_BOUNDS_CODE = '''
+LABELS = REQUESTED_LABELS
+actors = unreal.EditorLevelLibrary.get_all_level_actors()
+amap = {}
+for a in actors:
+    try:
+        n = a.get_name()
+    except Exception:
+        continue
+    if n in LABELS:
+        amap[n] = a
+
+result = {}
+for label in LABELS:
+    actor = amap.get(label)
+    if not actor:
+        continue
+
+    try:
+        cls = actor.get_class()
+        cls_name = cls.get_name() if cls else ""
+    except Exception:
+        cls_name = ""
+    if "Landscape" not in cls_name:
+        continue
+
+    try:
+        comps = actor.get_components_by_class(unreal.PrimitiveComponent)
+    except Exception:
+        comps = []
+
+    entries = []
+    for comp in comps or []:
+        try:
+            ccls = comp.get_class()
+            ccls_name = ccls.get_name() if ccls else ""
+        except Exception:
+            ccls_name = ""
+        if "LandscapeComponent" not in ccls_name:
+            continue
+
+        try:
+            try:
+                origin, extent, sphere_radius = unreal.SystemLibrary.get_component_bounds(comp)
+            except Exception:
+                origin, extent = comp.get_component_bounds()
+                sphere_radius = (extent.x * extent.x + extent.y * extent.y + extent.z * extent.z) ** 0.5
+            ex = float(extent.x)
+            ey = float(extent.y)
+            ez = float(extent.z)
+            radius = max(float(sphere_radius), 50.0)
+            extent_xy = max(ex * 2.0, ey * 2.0, 1.0)
+            entries.append((
+                float(origin.x - ex), float(origin.y - ey), float(origin.z - ez),
+                float(origin.x + ex), float(origin.y + ey), float(origin.z + ez),
+                radius, True, extent_xy,
+            ))
+        except Exception:
+            continue
+
+    if entries:
+        result[label] = entries
+'''
+
 _DEPS_SIZES_CODE = '''
 import ctypes
 import unreal
@@ -665,6 +729,35 @@ def _fetch_actor_refs(labels: list[str]) -> dict[str, dict]:
     return {}
 
 
+def fetch_landscape_component_bounds(labels: list[str]) -> dict[str, tuple]:
+    """Fetch per-landscape-component bounds for the given actor labels.
+
+    Returns {label: ((bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z,
+                      radius, True, extent_xy), ...)}.
+    Non-landscape actors are omitted.
+    """
+    if not labels:
+        return {}
+    code = _LANDSCAPE_COMPONENT_BOUNDS_CODE.replace("REQUESTED_LABELS", repr(set(labels)))
+    resp = uefn_cmd(code)
+    if not (resp.get("success") and isinstance(resp.get("result"), dict)):
+        return {}
+
+    result: dict[str, tuple] = {}
+    for label, items in resp["result"].items():
+        if not isinstance(items, list):
+            continue
+        normalized = []
+        for item in items:
+            if not isinstance(item, (list, tuple)) or len(item) != 9:
+                continue
+            normalized.append(tuple(float(v) if i != 7 else bool(v)
+                                    for i, v in enumerate(item)))
+        if normalized:
+            result[label] = tuple(normalized)
+    return result
+
+
 def _fetch_deps_and_sizes(packages: list[str]) -> dict[str, dict]:
     code = _DEPS_SIZES_CODE.replace("REQUESTED_PACKAGES", repr(packages))
     resp = uefn_execute(code)
@@ -771,6 +864,7 @@ def estimate_streaming_memory(
     actor_bounds: dict[str, tuple],
     asset_to_actors: dict[str, set[str]] | None = None,
     _precomputed: dict | None = None,
+    component_bounds_by_actor: dict[str, tuple] | None = None,
 ) -> tuple[int, dict[str, int]]:
     """Estimate streaming memory — hot path, fully inlined for speed.
 
@@ -788,6 +882,7 @@ def estimate_streaming_memory(
     _ac_get = asset_class.get
     _ti_get = tex_info_db.get
     _pc_get = _precomputed.get if _precomputed else None
+    _cb_get = component_bounds_by_actor.get if component_bounds_by_actor else None
 
     for path in asset_paths:
         full_mem = _am_get(path, 0)
@@ -839,18 +934,32 @@ def estimate_streaming_memory(
                 best_ext_xy = 0.0
                 found = False
                 for actor_label in actors:
-                    ab = _ab_get(actor_label)
-                    if not ab:
-                        continue
-                    dx = _max(ab[0] - sample_x, 0.0, sample_x - ab[3])
-                    dy = _max(ab[1] - sample_y, 0.0, sample_y - ab[4])
-                    d = _sqrt(dx * dx + dy * dy)
-                    if d < min_dist:
-                        min_dist = d
-                        best_radius = ab[6]
-                        best_is_lsc = ab[7]
-                        best_ext_xy = ab[8]
-                        found = True
+                    # Try component bounds first for landscape actors
+                    comp_entries = _cb_get(actor_label, None) if _cb_get else None
+                    if comp_entries:
+                        for cb in comp_entries:
+                            dx = _max(cb[0] - sample_x, 0.0, sample_x - cb[3])
+                            dy = _max(cb[1] - sample_y, 0.0, sample_y - cb[4])
+                            d = _sqrt(dx * dx + dy * dy)
+                            if d < min_dist:
+                                min_dist = d
+                                best_radius = cb[6]
+                                best_is_lsc = cb[7] if len(cb) > 7 else True
+                                best_ext_xy = cb[8] if len(cb) > 8 else 0.0
+                                found = True
+                    else:
+                        ab = _ab_get(actor_label)
+                        if not ab:
+                            continue
+                        dx = _max(ab[0] - sample_x, 0.0, sample_x - ab[3])
+                        dy = _max(ab[1] - sample_y, 0.0, sample_y - ab[4])
+                        d = _sqrt(dx * dx + dy * dy)
+                        if d < min_dist:
+                            min_dist = d
+                            best_radius = ab[6]
+                            best_is_lsc = ab[7]
+                            best_ext_xy = ab[8]
+                            found = True
 
             if not found or min_dist >= 1e30:
                 result[path] = full_mem
@@ -894,15 +1003,20 @@ def precompute_tex_bounds(
     asset_class: dict[str, str],
     asset_to_actors: dict[str, set[str]],
     actor_bounds: dict[str, tuple],
+    component_bounds_by_actor: dict[str, tuple] | None = None,
 ) -> dict[str, tuple]:
     """Pre-build a flat actor-bounds tuple per streaming texture.
 
     Returns {tex_path: ((bmin_x,bmin_y,bmax_x,bmax_y,radius,is_lsc,ext_xy), ...)}
     Each entry is a tuple of per-actor bound tuples (XY only + metadata).
     This eliminates dict lookups in the hot loop — just iterate a flat tuple.
+
+    When component_bounds_by_actor is provided, landscape actors are expanded
+    into per-component entries for finer-grained distance estimation.
     """
     result: dict[str, tuple] = {}
     _ab_get = actor_bounds.get
+    _cb_get = component_bounds_by_actor.get if component_bounds_by_actor else None
 
     for path, actors in asset_to_actors.items():
         cls = asset_class.get(path, "")
@@ -914,11 +1028,19 @@ def precompute_tex_bounds(
 
         bounds_list = []
         for actor_label in actors:
-            ab = _ab_get(actor_label)
-            if not ab:
-                continue
-            # (bmin_x, bmin_y, bmax_x, bmax_y, radius, is_landscape, extent_xy)
-            bounds_list.append((ab[0], ab[1], ab[3], ab[4], ab[6], ab[7], ab[8]))
+            comp_entries = _cb_get(actor_label, None) if _cb_get else None
+            if comp_entries:
+                for cb in comp_entries:
+                    # cb = (bmin_x, bmin_y, bmin_z, bmax_x, bmax_y, bmax_z, radius, is_lsc, ext_xy)
+                    bounds_list.append((cb[0], cb[1], cb[3], cb[4], cb[6],
+                                        cb[7] if len(cb) > 7 else True,
+                                        cb[8] if len(cb) > 8 else 0.0))
+            else:
+                ab = _ab_get(actor_label)
+                if not ab:
+                    continue
+                # (bmin_x, bmin_y, bmax_x, bmax_y, radius, is_landscape, extent_xy)
+                bounds_list.append((ab[0], ab[1], ab[3], ab[4], ab[6], ab[7], ab[8]))
 
         if bounds_list:
             result[path] = tuple(bounds_list)

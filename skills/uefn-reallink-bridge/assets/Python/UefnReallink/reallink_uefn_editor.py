@@ -19,13 +19,13 @@ from tkinter import ttk
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
-# 支持直接运行：将包的父目录加入 sys.path
-if __name__ == "__main__" and __package__ is None:
+# 支持直接运行/调试启动：将包的父目录加入 sys.path
+if not __package__:
     _this_dir = os.path.dirname(os.path.abspath(__file__))
     _parent_dir = os.path.dirname(_this_dir)
     if _parent_dir not in sys.path:
         sys.path.insert(0, _parent_dir)
-    __package__ = "UefnReallink"
+    __package__ = os.path.basename(_this_dir)
 
 from .core.theme import theme
 from .core.bridge import connection, trigger_dump, find_latest_log

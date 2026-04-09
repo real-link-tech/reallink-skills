@@ -20,7 +20,8 @@ from ..core.bridge import (
     connection,
     fetch_camera_info, fetch_grid_params_with_fallback,
     infer_grid_params_from_cells,
-    fetch_memory_data, is_cell_loaded, move_camera_to,
+    fetch_memory_data, fetch_landscape_component_bounds,
+    is_cell_loaded, move_camera_to,
     browse_to_asset, open_asset_editor, select_and_focus,
     DepCache, _resolve_all_deps,
     estimate_streaming_memory, build_actor_bounds, build_asset_to_actors,
@@ -868,6 +869,7 @@ class MemoryTab(ttk.Frame):
         self._tex_info: dict[str, dict] = {}
         self._asset_detail: dict[str, str] = {}
         self._actor_bounds: dict[str, tuple] = {}
+        self._landscape_component_bounds: dict[str, tuple] = {}
         self.actor_resolved: dict[str, set[str]] = {}
         self.actor_memory: dict[str, float] = {}
         self.cell_assets: dict[str, set[str]] = {}
@@ -896,6 +898,7 @@ class MemoryTab(ttk.Frame):
         self._scan_tex_info: dict[str, dict] = {}
         self._scan_asset_detail: dict[str, str] = {}
         self._scan_actor_bounds: dict[str, tuple] = {}
+        self._scan_landscape_component_bounds: dict[str, tuple] = {}
         self._scan_asset_to_actors: dict[str, set[str]] = {}
         self._grid_memory: dict[tuple[int, int], float] = {}
         self._grid_cells: dict[tuple[int, int], list] = {}
@@ -1118,6 +1121,7 @@ class MemoryTab(ttk.Frame):
         self._tex_info.clear()
         self._asset_detail.clear()
         self._actor_bounds.clear()
+        self._landscape_component_bounds.clear()
         self.actor_resolved.clear()
         self.actor_memory.clear()
         self.cell_assets.clear()
@@ -1132,6 +1136,7 @@ class MemoryTab(ttk.Frame):
         self._scan_tex_info.clear()
         self._scan_asset_detail.clear()
         self._scan_actor_bounds.clear()
+        self._scan_landscape_component_bounds.clear()
         self._scan_asset_to_actors.clear()
         self._grid_memory.clear()
         self._grid_cells.clear()
@@ -1265,6 +1270,7 @@ class MemoryTab(ttk.Frame):
             "scan_asset_class": self._scan_asset_class,
             "scan_tex_info": self._scan_tex_info,
             "scan_asset_detail": self._scan_asset_detail,
+            "scan_landscape_component_bounds": self._scan_landscape_component_bounds,
             "dep_cache": self.cache.entries,
         }
 
@@ -1315,9 +1321,16 @@ class MemoryTab(ttk.Frame):
         self._scan_asset_class = data.get("scan_asset_class", {})
         self._scan_tex_info = data.get("scan_tex_info", {})
         self._scan_asset_detail = data.get("scan_asset_detail", {})
+        raw_component_bounds = data.get("scan_landscape_component_bounds", {})
+        self._scan_landscape_component_bounds = {
+            k: tuple(tuple(vv) for vv in v)
+            for k, v in raw_component_bounds.items()
+            if isinstance(v, list)
+        }
         self._scan_actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
         self._scan_asset_to_actors = build_asset_to_actors(
             self._scan_actor_resolved)
+        self._landscape_component_bounds = dict(self._scan_landscape_component_bounds)
         self._scan_actor_refs = {}
 
         dep_cache = data.get("dep_cache", {})
@@ -1407,6 +1420,8 @@ class MemoryTab(ttk.Frame):
         self._scan_tex_info = tex_info
         self._scan_asset_detail = asset_detail
         self._scan_actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
+        self._scan_landscape_component_bounds = {}
+        self._landscape_component_bounds = {}
 
         all_labels = set()
         for cell in self.all_cells:
@@ -1460,21 +1475,35 @@ class MemoryTab(ttk.Frame):
                 self.after(0, lambda d=detail:
                     self.status_label.configure(text=f"[Scan 2/4] {d}"))
             refs = fetch_memory_data(list(all_labels), self.cache, progress_cb)
-            self.after(0, lambda: self._scan_phase3(refs))
+            landscape_component_bounds = {}
+            landscape_labels = [
+                label for label in refs
+                if (self._actor_db_by_name.get(label)
+                    and "Landscape" in ((self._actor_db_by_name.get(label).native_class
+                                          or self._actor_db_by_name.get(label).base_class
+                                          or "")))
+            ]
+            if landscape_labels:
+                landscape_component_bounds = fetch_landscape_component_bounds(
+                    landscape_labels)
+            self.after(0, lambda: self._scan_phase3(refs, landscape_component_bounds))
         threading.Thread(target=_bg, daemon=True).start()
 
-    def _scan_phase3(self, scan_actor_refs: dict):
+    def _scan_phase3(self, scan_actor_refs: dict, landscape_component_bounds: dict | None = None):
         self._scan_actor_refs = scan_actor_refs
         self._set_busy(True, "[Scan 3/4] Resolving dependencies...", theme.action_blue_fg)
         self.update_idletasks()
 
         t0 = time.perf_counter()
 
+        self._scan_landscape_component_bounds = landscape_component_bounds or {}
+
         dep_graph = self.cache.build_dep_graph()
         asset_memory = self.cache.build_asset_memory()
         asset_class = self.cache.build_asset_class()
         tex_info = self.cache.build_tex_info()
         asset_detail = self.cache.build_asset_detail()
+        self._landscape_component_bounds = dict(self._scan_landscape_component_bounds)
         self._scan_asset_memory = asset_memory
         self._scan_asset_class = asset_class
         self._scan_tex_info = tex_info
@@ -1487,6 +1516,7 @@ class MemoryTab(ttk.Frame):
                 direct, dep_graph, asset_class)
         self._scan_actor_resolved = scan_actor_resolved
         self._scan_asset_to_actors = build_asset_to_actors(scan_actor_resolved)
+        self._landscape_component_bounds = dict(self._scan_landscape_component_bounds)
 
         cell_assets_map: dict[str, set[str]] = {}
         for cell in self.all_cells:
@@ -1544,7 +1574,8 @@ class MemoryTab(ttk.Frame):
         tex_bounds_pc = None
         if use_streaming and tex_info and asset_to_actors:
             tex_bounds_pc = precompute_tex_bounds(
-                tex_info, asset_class, asset_to_actors, actor_bounds)
+                tex_info, asset_class, asset_to_actors, actor_bounds,
+                self._scan_landscape_component_bounds)
 
         def _bg():
             t0 = time.perf_counter()
@@ -1604,7 +1635,8 @@ class MemoryTab(ttk.Frame):
                     streaming_mem, _ = estimate_streaming_memory(
                         merged_streaming, asset_memory, asset_class, tex_info,
                         cx, cy, actor_bounds, asset_to_actors,
-                        _precomputed=tex_bounds_pc)
+                        _precomputed=tex_bounds_pc,
+                        component_bounds_by_actor=self._scan_landscape_component_bounds)
                     mem_total = fixed_total + streaming_mem
                 else:
                     merged = set(always_fixed)
@@ -1669,7 +1701,8 @@ class MemoryTab(ttk.Frame):
             _, streaming_mem = estimate_streaming_memory(
                 global_assets, self._scan_asset_memory, self._scan_asset_class,
                 self._scan_tex_info, cx, cy,
-                self._scan_actor_bounds, self._scan_asset_to_actors)
+                self._scan_actor_bounds, self._scan_asset_to_actors,
+                component_bounds_by_actor=self._scan_landscape_component_bounds)
             effective_mem = streaming_mem
         else:
             effective_mem = self._scan_asset_memory
@@ -1791,6 +1824,17 @@ class MemoryTab(ttk.Frame):
 
     def _on_memory_loaded(self, actor_refs: dict[str, list[str]]):
         self.actor_refs = actor_refs
+        landscape_labels = [
+            label for label in actor_refs
+            if (self._actor_db_by_name.get(label)
+                and "Landscape" in ((self._actor_db_by_name.get(label).native_class
+                                      or self._actor_db_by_name.get(label).base_class
+                                      or "")))
+        ]
+        self._landscape_component_bounds = {}
+        if connection.connected and landscape_labels:
+            self._landscape_component_bounds = fetch_landscape_component_bounds(
+                landscape_labels)
 
         self._set_busy(True, "[3/3] Building cache views...", theme.action_gold_fg)
         self.update_idletasks()
@@ -1843,6 +1887,8 @@ class MemoryTab(ttk.Frame):
         self._tex_info = self.cache.build_tex_info()
         self._asset_detail = self.cache.build_asset_detail()
         self._actor_bounds = build_actor_bounds(self.actors_db, self.all_cells)
+        if self._scan_landscape_component_bounds:
+            self._landscape_component_bounds = dict(self._scan_landscape_component_bounds)
         print(f"[perf] _rebuild_cache_views: {len(self.cache.entries)} entries, "
               f"{len(self._tex_info)} textures in "
               f"{(time.perf_counter()-t0)*1000:.0f}ms")
@@ -1876,7 +1922,8 @@ class MemoryTab(ttk.Frame):
             _, self._streaming_adjusted = estimate_streaming_memory(
                 self.global_assets, self._asset_memory, self._asset_class,
                 self._tex_info, cam_x, cam_y,
-                self._actor_bounds, asset_to_actors)
+                self._actor_bounds, asset_to_actors,
+                component_bounds_by_actor=self._landscape_component_bounds)
             effective_mem = self._streaming_adjusted
         else:
             self._streaming_adjusted = self._asset_memory
@@ -1993,7 +2040,8 @@ class MemoryTab(ttk.Frame):
         tex_bounds_pc = None
         if use_streaming and asset_to_actors:
             tex_bounds_pc = precompute_tex_bounds(
-                tex_info, asset_class, asset_to_actors, actor_bounds)
+                tex_info, asset_class, asset_to_actors, actor_bounds,
+                self._scan_landscape_component_bounds)
 
         def _bg():
             t0 = time.perf_counter()
@@ -2055,7 +2103,8 @@ class MemoryTab(ttk.Frame):
                     streaming_mem, _ = estimate_streaming_memory(
                         merged_streaming, asset_memory, asset_class, tex_info,
                         cx, cy, actor_bounds, asset_to_actors,
-                        _precomputed=tex_bounds_pc)
+                        _precomputed=tex_bounds_pc,
+                        component_bounds_by_actor=self._scan_landscape_component_bounds)
                     mem_total = fixed_total + streaming_mem
                 else:
                     merged = set(always_fixed)
