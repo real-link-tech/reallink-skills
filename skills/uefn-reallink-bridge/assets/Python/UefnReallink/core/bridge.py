@@ -563,6 +563,8 @@ k32.GetModuleHandleW.restype = ctypes.c_uint64
 k32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
 k32.GetProcAddress.restype = ctypes.c_uint64
 k32.GetProcAddress.argtypes = [ctypes.c_uint64, ctypes.c_char_p]
+_fname_ctor_a = k32.GetProcAddress(k32.GetModuleHandleW(ENGINE_DLL), b'??0FName@@QEAA@PEB_WW4EFindName@@@Z')
+FNameCtor = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_wchar_p, ctypes.c_int32)(_fname_ctor_a) if _fname_ctor_a else None
 
 h = k32.GetModuleHandleW(ENGINE_DLL)
 ctor_a = k32.GetProcAddress(h, b"??0FResourceSizeEx@@QEAA@W4Type@EResourceSizeMode@@@Z")
@@ -759,6 +761,764 @@ def _fetch_deps_and_sizes(packages: list[str]) -> dict[str, dict]:
     if resp.get("success") and isinstance(resp.get("result"), dict):
         return resp["result"]
     return {}
+
+
+_MATERIAL_INSTANCE_SCAN_CODE = r'''
+import unreal, ctypes
+
+ENGINE_DLL = "UnrealEditorFortnite-Engine-Win64-Shipping.dll"
+SIZEOF_RES = 248
+VTABLE_SLOT = 69
+STATIC_SWITCH_ELEM_SIZE = 44
+STATIC_SWITCH_OVERRIDE_OFFSET = 20
+STATIC_SWITCH_VALUE_OFFSET = 40
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+k32.GetModuleHandleW.restype = ctypes.c_uint64
+k32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+k32.GetProcAddress.restype = ctypes.c_uint64
+k32.GetProcAddress.argtypes = [ctypes.c_uint64, ctypes.c_char_p]
+
+h = k32.GetModuleHandleW(ENGINE_DLL)
+ctor_a = k32.GetProcAddress(h, b"??0FResourceSizeEx@@QEAA@W4Type@EResourceSizeMode@@@Z")
+gt_a = k32.GetProcAddress(h, b"?GetTotalMemoryBytes@FResourceSizeEx@@QEBA_KXZ")
+base_a = k32.GetProcAddress(h, b"?GetResourceSizeEx@UObject@@UEAAXAEAUFResourceSizeEx@@@Z")
+fname_ctor_a = k32.GetProcAddress(h, b"??0FName@@QEAA@PEB_WW4EFindName@@@Z")
+find_prop_a = k32.GetProcAddress(h, b"?FindPropertyByName@UStruct@@QEBAPEAVFProperty@@VFName@@@Z")
+
+Ctor = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_int32)(ctor_a)
+GetTotal = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64)(gt_a)
+VCall = ctypes.CFUNCTYPE(None, ctypes.c_uint64, ctypes.c_uint64)
+FNameCtor = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_wchar_p, ctypes.c_int32)(fname_ctor_a) if fname_ctor_a else None
+FindPropertyByName = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64)(find_prop_a) if find_prop_a else None
+
+cdo = unreal.Object.static_class().get_default_object()
+cdo_ptr = ctypes.c_uint64.from_address(id(cdo) + 16).value
+vtable = ctypes.c_uint64.from_address(cdo_ptr).value
+SLOT = -1
+for _i in range(200):
+    if ctypes.c_uint64.from_address(vtable + _i * 8).value == base_a:
+        SLOT = _i
+        break
+if SLOT < 0:
+    SLOT = VTABLE_SLOT
+
+buf = (ctypes.c_uint8 * SIZEOF_RES)()
+ba = ctypes.addressof(buf)
+_STATIC_RUNTIME_OFFSET = None
+
+BASE_OVERRIDE_FIELDS = (
+    ("Blend Mode", "override_blend_mode", "blend_mode", "blend_mode"),
+    ("Shading Model", "override_shading_model", "shading_model", "shading_model"),
+    ("Two Sided", "override_two_sided", "two_sided", "two_sided"),
+    ("Opacity Mask Clip Value", "override_opacity_mask_clip_value", "opacity_mask_clip_value", "opacity_mask_clip_value"),
+    ("Dithered LOD Transition", "override_dithered_lod_transition", "dithered_lod_transition", "dithered_lod_transition"),
+    ("Cast Dynamic Shadow As Masked", "override_cast_dynamic_shadow_as_masked", "cast_dynamic_shadow_as_masked", "cast_dynamic_shadow_as_masked"),
+    ("Output Translucent Velocity", "override_output_translucent_velocity", "output_translucent_velocity", "output_translucent_velocity"),
+    ("Compatible With Lumen Card Sharing", "override_compatible_with_lumen_card_sharing", "compatible_with_lumen_card_sharing", "compatible_with_lumen_card_sharing"),
+    ("Displacement Scaling", "override_displacement_scaling", "displacement_scaling", "displacement_scaling"),
+    ("Displacement Fade Range", "override_displacement_fade_range", "displacement_fade_range", "displacement_fade_range"),
+    ("Max World Position Offset Displacement", "override_max_world_position_offset_displacement", "max_world_position_offset_displacement", "max_world_position_offset_displacement"),
+)
+
+def _mem(obj):
+    try:
+        p = ctypes.c_uint64.from_address(id(obj) + 16).value
+        vt = ctypes.c_uint64.from_address(p).value
+        vf = ctypes.c_uint64.from_address(vt + SLOT * 8).value
+        Ctor(ba, 0)
+        VCall(vf)(p, ba)
+        return int(GetTotal(ba))
+    except Exception:
+        return 0
+
+def _pyobj_ptr(obj):
+    try:
+        return ctypes.c_uint64.from_address(id(obj) + 16).value
+    except Exception:
+        return 0
+
+def _normalize(value):
+    if value is None:
+        return ""
+    try:
+        export_text = getattr(value, "export_text", None)
+        if callable(export_text):
+            return export_text()
+    except Exception:
+        pass
+    try:
+        path_name = getattr(value, "get_path_name", None)
+        if callable(path_name):
+            return path_name() or ""
+    except Exception:
+        pass
+    return str(value)
+
+def _get_static_runtime_offset(asset):
+    global _STATIC_RUNTIME_OFFSET
+    if _STATIC_RUNTIME_OFFSET is not None:
+        return _STATIC_RUNTIME_OFFSET
+    if not (FNameCtor and FindPropertyByName and asset):
+        _STATIC_RUNTIME_OFFSET = -1
+        return _STATIC_RUNTIME_OFFSET
+    try:
+        cls = asset.get_class()
+        cls_ptr = _pyobj_ptr(cls)
+        if not cls_ptr:
+            _STATIC_RUNTIME_OFFSET = -1
+            return _STATIC_RUNTIME_OFFSET
+        name_buf = (ctypes.c_uint8 * 12)()
+        name_addr = ctypes.addressof(name_buf)
+        FNameCtor(name_addr, "StaticParametersRuntime", 0)
+        prop_ptr = FindPropertyByName(cls_ptr, name_addr)
+        if not prop_ptr:
+            _STATIC_RUNTIME_OFFSET = -1
+            return _STATIC_RUNTIME_OFFSET
+        raw = bytes((ctypes.c_uint8 * 96).from_address(prop_ptr))
+        _STATIC_RUNTIME_OFFSET = int.from_bytes(raw[80:84], "little", signed=True)
+    except Exception:
+        _STATIC_RUNTIME_OFFSET = -1
+    return _STATIC_RUNTIME_OFFSET
+
+def _make_fname_blob(text):
+    if not FNameCtor:
+        return None
+    try:
+        name_buf = (ctypes.c_uint8 * 12)()
+        FNameCtor(ctypes.addressof(name_buf), text, 0)
+        return bytes(name_buf)
+    except Exception:
+        return None
+
+def _append_issue(issue_rows, asset, parent, size_bytes, issue_type, entry_name, current_value, parent_value, note=""):
+    issue_rows.append({
+        "path": asset.get_path_name(),
+        "name": asset.get_name(),
+        "parent_name": parent.get_name() if parent else "",
+        "parent_path": parent.get_path_name() if parent else "",
+        "size_bytes": int(size_bytes or 0),
+        "issue_type": issue_type,
+        "entry_name": entry_name,
+        "current_value": _normalize(current_value),
+        "parent_value": _normalize(parent_value),
+        "note": note,
+    })
+
+def _collect_base_override_issues(asset, parent, size_bytes, issue_rows):
+    try:
+        base = asset.get_editor_property("base_property_overrides")
+    except Exception:
+        return
+    if not base or not parent:
+        return
+    for label, override_name, value_name, parent_name in BASE_OVERRIDE_FIELDS:
+        try:
+            is_overridden = bool(base.get_editor_property(override_name))
+        except Exception:
+            continue
+        if not is_overridden:
+            continue
+        try:
+            current_value = base.get_editor_property(value_name)
+            parent_value = parent.get_editor_property(parent_name)
+        except Exception:
+            continue
+        if _normalize(current_value) == _normalize(parent_value):
+            _append_issue(
+                issue_rows,
+                asset,
+                parent,
+                size_bytes,
+                "BasePropertyOverrides",
+                label,
+                current_value,
+                parent_value,
+                "Override checked but matches parent",
+            )
+
+def _collect_static_switch_issues(asset, parent, size_bytes, issue_rows):
+    offset = _get_static_runtime_offset(asset)
+    if offset is None or offset < 0:
+        return
+    obj_ptr = _pyobj_ptr(asset)
+    if not obj_ptr:
+        return
+    try:
+        runtime_addr = obj_ptr + offset
+        data_ptr = ctypes.c_uint64.from_address(runtime_addr).value
+        num = ctypes.c_int32.from_address(runtime_addr + 8).value
+    except Exception:
+        return
+    if not data_ptr or num <= 0 or num > 512:
+        return
+    try:
+        names = [str(n) for n in unreal.MaterialEditingLibrary.get_static_switch_parameter_names(asset)]
+    except Exception:
+        names = []
+    name_blobs = {name: _make_fname_blob(name) for name in names}
+    for idx in range(num):
+        try:
+            base_addr = data_ptr + idx * STATIC_SWITCH_ELEM_SIZE
+            raw = bytes((ctypes.c_uint8 * STATIC_SWITCH_ELEM_SIZE).from_address(base_addr))
+            is_overridden = bool(raw[STATIC_SWITCH_OVERRIDE_OFFSET])
+            if not is_overridden:
+                continue
+            current_value = bool(raw[STATIC_SWITCH_VALUE_OFFSET])
+        except Exception:
+            continue
+        entry_name = None
+        for candidate, blob in name_blobs.items():
+            if blob and raw[:12] == blob:
+                entry_name = candidate
+                break
+        if not entry_name:
+            entry_name = names[idx] if idx < len(names) else f"StaticSwitch[{idx}]"
+        parent_value = None
+        if parent:
+            try:
+                if isinstance(parent, unreal.MaterialInstanceConstant):
+                    parent_value = bool(
+                        unreal.MaterialEditingLibrary.get_material_instance_static_switch_parameter_value(
+                            parent,
+                            unreal.Name(entry_name),
+                        )
+                    )
+                elif isinstance(parent, unreal.Material):
+                    parent_value = bool(
+                        unreal.MaterialEditingLibrary.get_material_default_static_switch_parameter_value(
+                            parent,
+                            unreal.Name(entry_name),
+                        )
+                    )
+                else:
+                    base_material = parent.get_base_material()
+                    if isinstance(base_material, unreal.Material):
+                        parent_value = bool(
+                            unreal.MaterialEditingLibrary.get_material_default_static_switch_parameter_value(
+                                base_material,
+                                unreal.Name(entry_name),
+                            )
+                        )
+            except Exception:
+                parent_value = None
+        if parent_value is None:
+            continue
+        if current_value == parent_value:
+            _append_issue(
+                issue_rows,
+                asset,
+                parent,
+                size_bytes,
+                "Static Switch",
+                entry_name,
+                current_value,
+                parent_value,
+                "Override checked but matches parent",
+            )
+
+def _collect_nanite_override_issues(asset, parent, size_bytes, issue_rows):
+    try:
+        nanite = asset.get_editor_property("nanite_override_material")
+    except Exception:
+        return
+    if not nanite:
+        return
+    try:
+        export_text = nanite.export_text()
+    except Exception:
+        export_text = ""
+    if "bEnableOverride=True" not in export_text:
+        return
+    current_value = ""
+    try:
+        current_value = nanite.get_editor_property("override_material_editor")
+    except Exception:
+        current_value = None
+    if current_value:
+        return
+    _append_issue(
+        issue_rows,
+        asset,
+        parent,
+        size_bytes,
+        "Nanite Override Material",
+        "Override Material",
+        current_value,
+        "",
+        "Override checked but no material assigned",
+    )
+
+def _collect_base_override_signature(asset, parent):
+    try:
+        base = asset.get_editor_property("base_property_overrides")
+    except Exception:
+        return {"base_override_signature": "", "base_override_items": []}
+    if not base:
+        return {"base_override_signature": "", "base_override_items": []}
+    items = []
+    labels = []
+    for label, override_name, value_name, _parent_name in BASE_OVERRIDE_FIELDS:
+        try:
+            is_overridden = bool(base.get_editor_property(override_name))
+        except Exception:
+            continue
+        if not is_overridden:
+            continue
+        try:
+            current_value = base.get_editor_property(value_name)
+        except Exception:
+            current_value = None
+        items.append(f"{label}={_normalize(current_value)}")
+        labels.append(label)
+    items.sort()
+    labels.sort()
+    return {
+        "base_override_signature": " | ".join(items),
+        "base_override_items": items,
+        "base_override_labels": labels,
+    }
+
+def _current_project_mount():
+    try:
+        world = unreal.EditorLevelLibrary.get_editor_world()
+        if world:
+            path = world.get_path_name() or ""
+            if path.startswith("/"):
+                parts = path.split("/")
+                if len(parts) > 1 and parts[1]:
+                    return "/" + parts[1] + "/"
+    except Exception:
+        pass
+    return ""
+
+project_mount = _current_project_mount()
+scan_root = project_mount[:-1] if project_mount.endswith("/") else project_mount
+ar = unreal.AssetRegistryHelpers.get_asset_registry()
+assets = []
+if scan_root:
+    try:
+        ar_filter = unreal.ARFilter(
+            class_paths=[unreal.TopLevelAssetPath("/Script/Engine", "MaterialInstanceConstant")],
+            package_paths=[scan_root],
+            recursive_paths=True,
+        )
+        assets = ar.get_assets(ar_filter)
+    except Exception:
+        assets = []
+
+rows = []
+issue_rows = []
+for ad in assets:
+    try:
+        obj_path = str(ad.object_path if hasattr(ad, "object_path") else ad.get_soft_object_path())
+    except Exception:
+        try:
+            obj_path = str(ad.get_soft_object_path())
+        except Exception:
+            obj_path = ""
+    if not obj_path:
+        try:
+            obj_path = str(ad.package_name if hasattr(ad, "package_name") else "")
+        except Exception:
+            try:
+                obj_path = str(ad.get_editor_property("package_name"))
+            except Exception:
+                obj_path = ""
+    if not obj_path:
+        continue
+    if obj_path.startswith("/Engine/") or obj_path.startswith("/Script/"):
+        continue
+    if project_mount and not obj_path.startswith(project_mount):
+        continue
+    try:
+        asset = unreal.EditorAssetLibrary.load_asset(obj_path)
+    except Exception:
+        asset = None
+    if not asset:
+        continue
+    try:
+        parent = asset.get_editor_property("parent")
+    except Exception:
+        parent = None
+    size_bytes = _mem(asset)
+    rows.append({
+        "name": asset.get_name(),
+        "path": asset.get_path_name(),
+        "parent_name": parent.get_name() if parent else "",
+        "parent_path": parent.get_path_name() if parent else "",
+        "size_bytes": size_bytes,
+        **_collect_base_override_signature(asset, parent),
+    })
+    _collect_base_override_issues(asset, parent, size_bytes, issue_rows)
+    _collect_static_switch_issues(asset, parent, size_bytes, issue_rows)
+    _collect_nanite_override_issues(asset, parent, size_bytes, issue_rows)
+
+rows.sort(key=lambda x: (-int(x.get("size_bytes", 0)), x.get("name", "").lower()))
+issue_rows.sort(key=lambda x: (-int(x.get("size_bytes", 0)), x.get("name", "").lower(), x.get("issue_type", ""), x.get("entry_name", "")))
+result = {
+    "project_mount": project_mount,
+    "count": len(rows),
+    "rows": rows,
+    "issue_count": len(issue_rows),
+    "issue_rows": issue_rows,
+}
+'''
+
+
+def fetch_material_instance_sizes() -> dict:
+    """Scan project-local material instances and return their GetResourceSizeEx values."""
+    resp = uefn_execute(_MATERIAL_INSTANCE_SCAN_CODE)
+    if resp.get("success") and isinstance(resp.get("result"), dict):
+        return resp["result"]
+    return {"count": 0, "rows": [], "error": resp.get("error") or resp.get("stderr") or "scan failed"}
+
+
+def fix_material_instance_issue(path: str, issue_type: str, entry_name: str) -> dict:
+    escaped_path = path.replace("\\", "\\\\").replace("'", "\\'")
+    escaped_issue_type = issue_type.replace("\\", "\\\\").replace("'", "\\'")
+    escaped_entry_name = entry_name.replace("\\", "\\\\").replace("'", "\\'")
+    code = f"""
+import unreal, ctypes
+
+ENGINE_DLL = "UnrealEditorFortnite-Engine-Win64-Shipping.dll"
+ASSET = '{escaped_path}'
+ISSUE_TYPE = '{escaped_issue_type}'
+ENTRY_NAME = '{escaped_entry_name}'
+
+BASE_OVERRIDE_MAP = {{
+    'Blend Mode': 'override_blend_mode',
+    'Shading Model': 'override_shading_model',
+    'Two Sided': 'override_two_sided',
+    'Opacity Mask Clip Value': 'override_opacity_mask_clip_value',
+    'Dithered LOD Transition': 'override_dithered_lod_transition',
+    'Cast Dynamic Shadow As Masked': 'override_cast_dynamic_shadow_as_masked',
+    'Output Translucent Velocity': 'override_output_translucent_velocity',
+    'Compatible With Lumen Card Sharing': 'override_compatible_with_lumen_card_sharing',
+    'Displacement Scaling': 'override_displacement_scaling',
+    'Displacement Fade Range': 'override_displacement_fade_range',
+    'Max World Position Offset Displacement': 'override_max_world_position_offset_displacement',
+}}
+
+def _pyobj_ptr(obj):
+    return ctypes.c_uint64.from_address(id(obj) + 16).value
+
+def _fix_static_switch(asset, entry_name):
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    k32.GetModuleHandleW.restype = ctypes.c_uint64
+    k32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    k32.GetProcAddress.restype = ctypes.c_uint64
+    k32.GetProcAddress.argtypes = [ctypes.c_uint64, ctypes.c_char_p]
+    h = k32.GetModuleHandleW(ENGINE_DLL)
+    ctor_fname_a = k32.GetProcAddress(h, b'??0FName@@QEAA@PEB_WW4EFindName@@@Z')
+    find_prop_a = k32.GetProcAddress(h, b'?FindPropertyByName@UStruct@@QEBAPEAVFProperty@@VFName@@@Z')
+    if not h or not ctor_fname_a or not find_prop_a:
+        raise RuntimeError('native reflection symbols not available')
+    cls = asset.get_class()
+    class_ptr = _pyobj_ptr(cls)
+    FNameCtor = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_wchar_p, ctypes.c_int32)(ctor_fname_a)
+    FindPropertyByName = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64)(find_prop_a)
+    target_name_buf = (ctypes.c_uint8 * 12)()
+    FNameCtor(ctypes.addressof(target_name_buf), entry_name, 0)
+    target_blob = bytes(target_name_buf)
+    name_buf = (ctypes.c_uint8 * 12)()
+    name_addr = ctypes.addressof(name_buf)
+    FNameCtor(name_addr, 'StaticParametersRuntime', 0)
+    prop_ptr = FindPropertyByName(class_ptr, name_addr)
+    if not prop_ptr:
+        raise RuntimeError('StaticParametersRuntime property not found')
+    raw = bytes((ctypes.c_uint8 * 96).from_address(prop_ptr))
+    runtime_offset = int.from_bytes(raw[80:84], 'little', signed=True)
+    runtime_addr = _pyobj_ptr(asset) + runtime_offset
+    data_ptr = ctypes.c_uint64.from_address(runtime_addr).value
+    num = ctypes.c_int32.from_address(runtime_addr + 8).value
+    changed = False
+    for idx in range(num):
+        elem = data_ptr + idx * 44
+        raw_elem = bytes((ctypes.c_uint8 * 12).from_address(elem))
+        if raw_elem == target_blob:
+            ctypes.c_uint8.from_address(elem + 20).value = 0
+            changed = True
+            break
+    if not changed:
+        raise RuntimeError(f'static switch not found: {{entry_name}}')
+
+asset = unreal.EditorAssetLibrary.load_asset(ASSET)
+if not asset:
+    raise RuntimeError(f'asset not found: {{ASSET}}')
+
+if ISSUE_TYPE == 'BasePropertyOverrides':
+    override_name = BASE_OVERRIDE_MAP.get(ENTRY_NAME)
+    if not override_name:
+        raise RuntimeError(f'unsupported base override: {{ENTRY_NAME}}')
+    base = asset.get_editor_property('base_property_overrides')
+    base.set_editor_property(override_name, False)
+    asset.set_editor_property('base_property_overrides', base)
+elif ISSUE_TYPE == 'Nanite Override Material':
+    asset.set_nanite_override_material(False, None)
+elif ISSUE_TYPE == 'Static Switch':
+    _fix_static_switch(asset, ENTRY_NAME)
+else:
+    raise RuntimeError(f'unsupported issue type: {{ISSUE_TYPE}}')
+
+unreal.MaterialEditingLibrary.update_material_instance(asset)
+
+result = {{
+    'path': asset.get_path_name(),
+    'issue_type': ISSUE_TYPE,
+    'entry_name': ENTRY_NAME,
+    'fixed': True,
+}}
+"""
+    resp = uefn_execute(code)
+    if resp.get("success") and isinstance(resp.get("result"), dict):
+        return resp["result"]
+    return {"fixed": False, "error": resp.get("error") or resp.get("stderr") or "fix failed"}
+
+
+def fix_material_instance_asset(path: str, issues: list[dict]) -> dict:
+    escaped_path = path.replace("\\", "\\\\").replace("'", "\\'")
+    normalized_issues = [
+        {
+            "issue_type": str(item.get("issue_type", "")),
+            "entry_name": str(item.get("entry_name", "")),
+        }
+        for item in (issues or [])
+        if item.get("issue_type") and item.get("entry_name")
+    ]
+    code = f"""
+import unreal, ctypes, json
+
+ENGINE_DLL = "UnrealEditorFortnite-Engine-Win64-Shipping.dll"
+ASSET = '{escaped_path}'
+ISSUES = json.loads({json.dumps(json.dumps(normalized_issues))})
+
+BASE_OVERRIDE_MAP = {{
+    'Blend Mode': 'override_blend_mode',
+    'Shading Model': 'override_shading_model',
+    'Two Sided': 'override_two_sided',
+    'Opacity Mask Clip Value': 'override_opacity_mask_clip_value',
+    'Dithered LOD Transition': 'override_dithered_lod_transition',
+    'Cast Dynamic Shadow As Masked': 'override_cast_dynamic_shadow_as_masked',
+    'Output Translucent Velocity': 'override_output_translucent_velocity',
+    'Compatible With Lumen Card Sharing': 'override_compatible_with_lumen_card_sharing',
+    'Displacement Scaling': 'override_displacement_scaling',
+    'Displacement Fade Range': 'override_displacement_fade_range',
+    'Max World Position Offset Displacement': 'override_max_world_position_offset_displacement',
+}}
+
+def _pyobj_ptr(obj):
+    return ctypes.c_uint64.from_address(id(obj) + 16).value
+
+def _clear_static_switches(asset, entry_names):
+    if not entry_names:
+        return []
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    k32.GetModuleHandleW.restype = ctypes.c_uint64
+    k32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    k32.GetProcAddress.restype = ctypes.c_uint64
+    k32.GetProcAddress.argtypes = [ctypes.c_uint64, ctypes.c_char_p]
+    h = k32.GetModuleHandleW(ENGINE_DLL)
+    ctor_fname_a = k32.GetProcAddress(h, b'??0FName@@QEAA@PEB_WW4EFindName@@@Z')
+    find_prop_a = k32.GetProcAddress(h, b'?FindPropertyByName@UStruct@@QEBAPEAVFProperty@@VFName@@@Z')
+    if not h or not ctor_fname_a or not find_prop_a:
+        raise RuntimeError('native reflection symbols not available')
+    FNameCtor = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_wchar_p, ctypes.c_int32)(ctor_fname_a)
+    FindPropertyByName = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64)(find_prop_a)
+
+    cls = asset.get_class()
+    class_ptr = _pyobj_ptr(cls)
+    name_buf = (ctypes.c_uint8 * 12)()
+    name_addr = ctypes.addressof(name_buf)
+    FNameCtor(name_addr, 'StaticParametersRuntime', 0)
+    prop_ptr = FindPropertyByName(class_ptr, name_addr)
+    if not prop_ptr:
+        raise RuntimeError('StaticParametersRuntime property not found')
+    raw = bytes((ctypes.c_uint8 * 96).from_address(prop_ptr))
+    runtime_offset = int.from_bytes(raw[80:84], 'little', signed=True)
+    runtime_addr = _pyobj_ptr(asset) + runtime_offset
+    data_ptr = ctypes.c_uint64.from_address(runtime_addr).value
+    num = ctypes.c_int32.from_address(runtime_addr + 8).value
+
+    targets = {{}}
+    for entry_name in entry_names:
+        buf = (ctypes.c_uint8 * 12)()
+        FNameCtor(ctypes.addressof(buf), entry_name, 0)
+        targets[bytes(buf)] = entry_name
+
+    cleared = []
+    for idx in range(num):
+        elem = data_ptr + idx * 44
+        name_blob = bytes((ctypes.c_uint8 * 12).from_address(elem))
+        hit = targets.get(name_blob)
+        if hit:
+            ctypes.c_uint8.from_address(elem + 20).value = 0
+            cleared.append(hit)
+    return cleared
+
+asset = unreal.EditorAssetLibrary.load_asset(ASSET)
+if not asset:
+    raise RuntimeError(f'asset not found: {{ASSET}}')
+
+base_override_names = []
+static_switch_names = []
+clear_nanite = False
+for item in ISSUES:
+    issue_type = item.get('issue_type', '')
+    entry_name = item.get('entry_name', '')
+    if issue_type == 'BasePropertyOverrides':
+        override_name = BASE_OVERRIDE_MAP.get(entry_name)
+        if override_name:
+            base_override_names.append(override_name)
+    elif issue_type == 'Static Switch':
+        static_switch_names.append(entry_name)
+    elif issue_type == 'Nanite Override Material':
+        clear_nanite = True
+
+if base_override_names:
+    base = asset.get_editor_property('base_property_overrides')
+    for override_name in set(base_override_names):
+        base.set_editor_property(override_name, False)
+    asset.set_editor_property('base_property_overrides', base)
+
+cleared_switches = _clear_static_switches(asset, list(dict.fromkeys(static_switch_names)))
+
+if clear_nanite:
+    asset.set_nanite_override_material(False, None)
+
+unreal.MaterialEditingLibrary.update_material_instance(asset)
+
+result = {{
+    'path': asset.get_path_name(),
+    'fixed': True,
+    'issue_count': len(ISSUES),
+    'base_override_count': len(set(base_override_names)),
+    'static_switch_count': len(cleared_switches),
+    'nanite_cleared': clear_nanite,
+}}
+"""
+    resp = uefn_execute(code)
+    if resp.get("success") and isinstance(resp.get("result"), dict):
+        return resp["result"]
+    return {"fixed": False, "error": resp.get("error") or resp.get("stderr") or "asset fix failed"}
+
+
+def optimize_material_instance_group(group_rows: list[dict]) -> dict:
+    normalized_rows = []
+    for row in group_rows or []:
+        path = str(row.get("path", ""))
+        parent_path = str(row.get("parent_path", ""))
+        labels = list(row.get("base_override_labels") or [])
+        if path and parent_path and labels:
+            normalized_rows.append({
+                "path": path,
+                "parent_path": parent_path,
+                "parent_name": str(row.get("parent_name", "")),
+                "base_override_signature": str(row.get("base_override_signature", "")),
+                "base_override_labels": labels,
+            })
+    if not normalized_rows:
+        return {"optimized": False, "error": "no rows to optimize"}
+
+    code = f"""
+import unreal, json, hashlib, re
+
+ROWS = json.loads({json.dumps(json.dumps(normalized_rows))})
+
+LABEL_TO_OVERRIDE = {{
+    'Blend Mode': 'override_blend_mode',
+    'Shading Model': 'override_shading_model',
+    'Two Sided': 'override_two_sided',
+    'Opacity Mask Clip Value': 'override_opacity_mask_clip_value',
+    'Dithered LOD Transition': 'override_dithered_lod_transition',
+    'Cast Dynamic Shadow As Masked': 'override_cast_dynamic_shadow_as_masked',
+    'Output Translucent Velocity': 'override_output_translucent_velocity',
+    'Compatible With Lumen Card Sharing': 'override_compatible_with_lumen_card_sharing',
+    'Displacement Scaling': 'override_displacement_scaling',
+    'Displacement Fade Range': 'override_displacement_fade_range',
+    'Max World Position Offset Displacement': 'override_max_world_position_offset_displacement',
+}}
+
+def _make_asset_name(parent_name, signature):
+    short = []
+    lowered = signature.lower()
+    if 'blend mode=' in lowered:
+        if 'translucent' in lowered:
+            short.append('BM_T')
+        elif 'additive' in lowered:
+            short.append('BM_A')
+        elif 'masked' in lowered:
+            short.append('BM_M')
+        elif 'opaque' in lowered:
+            short.append('BM_O')
+        else:
+            short.append('BM')
+    if 'shading model=' in lowered:
+        if 'unlit' in lowered:
+            short.append('SM_U')
+        elif 'default_lit' in lowered or 'default lit' in lowered:
+            short.append('SM_L')
+        else:
+            short.append('SM')
+    if 'two sided=' in lowered:
+        short.append('TS')
+    if not short:
+        short.append('Shared')
+    digest = hashlib.md5(signature.encode('utf-8')).hexdigest()[:6]
+    return f"{{parent_name}}_Grp_{{'_'.join(short)}}_{{digest}}"
+
+first = ROWS[0]
+template = unreal.EditorAssetLibrary.load_asset(first['path'])
+parent = unreal.EditorAssetLibrary.load_asset(first['parent_path'])
+if not template or not parent:
+    raise RuntimeError('template or parent asset not found')
+
+parent_name = first.get('parent_name') or parent.get_name()
+signature = first.get('base_override_signature') or 'Shared'
+package_path = first['path'].rsplit('/', 1)[0]
+asset_name = _make_asset_name(parent_name, signature)
+
+asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+factory = unreal.MaterialInstanceConstantFactoryNew()
+shared = asset_tools.create_asset(asset_name, package_path, unreal.MaterialInstanceConstant, factory)
+if not shared:
+    raise RuntimeError('failed to create shared material instance')
+
+unreal.MaterialEditingLibrary.set_material_instance_parent(shared, parent)
+
+template_base = template.get_editor_property('base_property_overrides')
+shared.set_editor_property('base_property_overrides', template_base)
+unreal.MaterialEditingLibrary.update_material_instance(shared)
+
+cleared_assets = []
+for row in ROWS:
+    child = unreal.EditorAssetLibrary.load_asset(row['path'])
+    if not child:
+        continue
+    unreal.MaterialEditingLibrary.set_material_instance_parent(child, shared)
+    base = child.get_editor_property('base_property_overrides')
+    for label in row.get('base_override_labels', []):
+        override_name = LABEL_TO_OVERRIDE.get(label)
+        if override_name:
+            try:
+                base.set_editor_property(override_name, False)
+            except Exception:
+                pass
+    child.set_editor_property('base_property_overrides', base)
+    unreal.MaterialEditingLibrary.update_material_instance(child)
+    cleared_assets.append(child.get_path_name())
+
+result = {{
+    'optimized': True,
+    'shared_parent_path': shared.get_path_name(),
+    'child_count': len(cleared_assets),
+    'children': cleared_assets,
+}}
+"""
+    resp = uefn_execute(code)
+    if resp.get("success") and isinstance(resp.get("result"), dict):
+        return resp["result"]
+    return {"optimized": False, "error": resp.get("error") or resp.get("stderr") or "group optimize failed"}
 
 
 def _resolve_all_deps(direct: list[str], dep_graph: dict[str, list[str]],

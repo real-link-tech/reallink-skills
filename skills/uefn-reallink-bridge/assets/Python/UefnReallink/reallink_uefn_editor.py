@@ -31,6 +31,7 @@ from .core.theme import theme
 from .core.bridge import connection, trigger_dump, find_latest_log
 from .core.parser import parse_log
 from .tabs.common_tab import CommonTab
+from .tabs.material_optimizer_tab import MaterialOptimizerTab
 from .tabs.streaming_layout_tab import StreamingLayoutTab
 from .tabs.memory_test_tab import MemoryTab
 from .widgets.connection_status import ConnectionStatusBar
@@ -68,6 +69,9 @@ class ReallinkUefnEditor(tk.Tk):
             notebook, actors, cells, log_path,
             on_refresh=self._on_refresh)
         notebook.add(self.layout_tab, text="StreamingLayout")
+
+        self.material_tab = MaterialOptimizerTab(notebook)
+        notebook.add(self.material_tab, text="MaterialOptimizer")
 
         project_name = (os.path.basename(os.path.dirname(log_path))
                         if log_path else "")

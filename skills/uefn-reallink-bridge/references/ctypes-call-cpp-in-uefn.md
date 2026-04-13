@@ -646,3 +646,182 @@ for obj in unreal.ObjectIterator(unreal.ToolMenu):
         })
 # 在 UEFN 5.8 中发现 2382 个 UToolMenu 对象
 ```
+
+---
+
+## 12. Reverse Notes: Reading StaticParametersRuntime From UMaterialInstance
+
+This section records the working path used to inspect MaterialInstance static switch override state in a live UEFN process.
+
+### 12.1 Goal
+
+The editor UI shows override checkboxes for:
+
+- BasePropertyOverrides
+- Global Static Switch Parameter Values
+- Nanite Override Material
+
+BasePropertyOverrides and Nanite Override Material can be read from normal Python editor properties.
+The hard part is Static Switch override state, because the real data lives in:
+
+- UMaterialInstance::StaticParametersRuntime
+- FStaticParameterSetRuntimeData::StaticSwitchParameters
+- FStaticSwitchParameter::bOverride
+
+and StaticParametersRuntime is not directly accessible through ordinary UEFN Python reflection.
+
+### 12.2 What worked
+
+The successful path was:
+
+1. Get the native UMaterialInstance* from the Python wrapper with id(obj) + 16
+2. Call native exported reflection helpers from the shipping Engine DLL
+3. Resolve the FProperty* for StaticParametersRuntime
+4. Read that property's Offset_Internal
+5. Compute:
+
+`	ext
+StaticParametersRuntimeAddress = MaterialInstancePtr + Offset_Internal
+`
+
+6. Interpret the first field of FStaticParameterSetRuntimeData as:
+
+`cpp
+TArray<FStaticSwitchParameter> StaticSwitchParameters;
+`
+
+7. Read each FStaticSwitchParameter element directly from memory
+
+This path was stable and did not require direct Python access to the private property.
+
+### 12.3 Native functions that were actually useful
+
+These exported symbols were successfully resolved from:
+
+- UnrealEditorFortnite-Engine-Win64-Shipping.dll
+
+Useful symbols:
+
+`	ext
+??0FName@@QEAA@PEB_WW4EFindName@@@Z
+?FindPropertyByName@UStruct@@QEBAPEAVFProperty@@VFName@@@Z
+?GetStaticParameterValues@UMaterialInterface@@QEBAXAEAUFStaticParameterSet@@@Z
+`
+
+Notes:
+
+- FindPropertyByName was enough to resolve StaticParametersRuntime
+- GetStaticParameterValues was useful to prove the static switch entries existed and to recover their order/names
+- Some FProperty helper exports that would have been nice to use were not exported in the loaded UEFN shipping module, so reading raw memory was simpler and more reliable
+
+### 12.4 Runtime-discovered offsets that mattered
+
+Do not hardcode layout based only on local source. Use runtime reflection first whenever possible.
+
+For the tested UEFN build, StaticParametersRuntime was discovered like this:
+
+- UClass* cls = asset.get_class()
+- FindPropertyByName(cls, "StaticParametersRuntime")
+- read Offset_Internal from the returned FProperty
+
+For the tested MaterialInstanceConstant, the runtime value was:
+
+`	ext
+StaticParametersRuntime.Offset_Internal = 1416
+`
+
+Inside FStaticSwitchParameter, the field offsets used in the probe were:
+
+`	ext
+ParameterInfo    = 0
+bOverride        = 20
+ExpressionGUID   = 24
+Value            = 40
+ElementSize      = 44
+`
+
+These were derived from runtime reflection on /Script/Engine.StaticSwitchParameter, not guessed from source alone.
+
+### 12.5 Practical memory layout used by the probe
+
+Once StaticParametersRuntime was located, the first 16 bytes were interpreted as a normal UE TArray header:
+
+`	ext
++0x00 Data pointer (uint64)
++0x08 Num         (int32)
++0x0C Max         (int32)
+`
+
+For the tested asset:
+
+- StaticSwitchParameters.Num = 2
+- the two entries were:
+  - U Clamp (SB)
+  - V Clamp (SB)
+
+Then each element was read as:
+
+`python
+base = data_ptr + index * 44
+b_override = bool(read_u8(base + 20))
+value = bool(read_u8(base + 40))
+`
+
+### 12.6 Confirmed result on the tested asset
+
+Asset:
+
+`	ext
+/RPG2/VFX_Source/Zhuheng/Mateirial/M_zhuheng_Inst121.M_zhuheng_Inst121
+`
+
+Before cleanup, both static switches were confirmed as:
+
+- U Clamp (SB): Override = true, Value = false
+- V Clamp (SB): Override = true, Value = false
+
+After the override checkboxes were cleared in the editor, the same path showed:
+
+- StaticSwitchParameters.Num = 0
+
+This is an important result:
+
+- clearing the checkbox does not merely change the value back to default
+- the overridden static switch entry can disappear entirely from StaticParametersRuntime
+
+### 12.7 What did not work reliably
+
+- GetStaticSwitchParameterSource() does **not** tell you whether the left override checkbox is checked
+  - it reports the parameter definition source, not the instance override owner
+- ordinary Python reflection could not directly access StaticParametersRuntime
+- trying to infer override state from UI alone is unreliable
+- broad memory experiments are risky and can crash the bridge/editor process
+
+### 12.8 Safe workflow recommendation
+
+When probing similar private runtime data in UEFN:
+
+1. Prefer runtime reflection to discover object/property offsets
+2. Use source code only to understand structure meaning, not to blindly trust final offsets
+3. Keep probes narrow and deterministic
+4. Verify on one known asset before scaling to a project-wide scan
+5. For bool-like flags in value structs, raw byte reads are often simpler than trying to force missing FProperty helpers
+
+### 12.9 Minimal pattern
+
+`python
+obj_ptr = get_uobject_ptr(material_instance)
+prop_ptr = FindPropertyByName(material_instance.get_class(), "StaticParametersRuntime")
+runtime_offset = read_property_offset_internal(prop_ptr)
+runtime_addr = obj_ptr + runtime_offset
+
+data_ptr = read_u64(runtime_addr + 0)
+num = read_i32(runtime_addr + 8)
+
+for i in range(num):
+    elem = data_ptr + i * 44
+    b_override = bool(read_u8(elem + 20))
+    value = bool(read_u8(elem + 40))
+`
+
+This was the key technique that enabled the MaterialOptimizer review panel to detect invalid static switch overrides.
