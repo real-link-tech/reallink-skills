@@ -295,6 +295,19 @@ echo "showflag.postprocessing 0" | "$PCTL" process console 0x00000054
 
 The `<path>` is a **local host PC path** to the `.pkg` file. If a slot is specified and it's not the current slot, the system will automatically switch to it.
 
+**Determining install success:** Use **only the exit code**. Exit code 0 means success, non-zero means failure. Do NOT grep the output for keywords like "success", "completed", or "installed" — `prospero-ctrl` does not print these words on success. A successful install outputs a progress bar and the TitleId/ContentId, nothing more:
+
+```
+1/2 Installing Package
+===================================================
+2/2 Completing install
+===================================================
+TitleId: TEST23576
+ContentId: TT0000-TEST23576_00-PROJECTPBZ000000
+```
+
+A failed install prints `[ERROR]: ...` and returns a non-zero exit code (e.g. 255).
+
 ### List installed packages
 
 ```bash
