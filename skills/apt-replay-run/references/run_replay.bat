@@ -13,10 +13,13 @@ if defined RequestedRunMode set "RunMode=%RequestedRunMode%"
 if not defined EnginePath set "EnginePath=D:\UnrealEngine"
 if not defined ProjectPath set "ProjectPath=E:\PBZ\ProjectPBZ"
 if not defined RunMode set "RunMode=Packaged"
+if not defined Platform set "Platform=PS5"
+if not defined TargetName set "TargetName=ProjectPBZ"
 if not defined REPLAY_PATH set "REPLAY_PATH=\\192.168.0.7\store\APT\ReplayFiles\sample.replay"
 if not defined MapName set "MapName=PBZ_WP_ZhuLinGuWu"
 if not defined PS5Target set "PS5Target=192.168.103.108"
 if not defined PS5DeviceIp set "PS5DeviceIp=PS5:%PS5Target%"
+if not defined DeviceId set "DeviceId=%PS5DeviceIp%"
 if not defined Configuration set "Configuration=Test"
 if not defined MaxDuration set "MaxDuration=3600"
 if not defined BuildDir set "BuildDir=\\192.168.103.61\builds_ps\PS5\Test\BuildName\CL-123456_JKS-0000"
@@ -37,10 +40,13 @@ if not defined EditorTestName set "EditorTestName=AutomatedPerfTest.ReplayTest"
 
 set "EnginePath=%EnginePath:"=%"
 set "RunMode=%RunMode:"=%"
+set "Platform=%Platform:"=%"
 if "%EnginePath%"=="" set "EnginePath=D:\UnrealEngine"
 
 echo [INFO] RunMode="%RunMode%"
 echo [INFO] EnginePath="%EnginePath%"
+echo [INFO] Platform="%Platform%"
+echo [INFO] TargetName="%TargetName%"
 
 set "AptDoArgs="
 if /I "%DoInsightsTrace%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoInsightsTrace"
@@ -58,6 +64,9 @@ if "%DoGPUReshape%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoGPUResh
 if /I "%DoVideoCapture%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoVideoCapture"
 if "%DoVideoCapture%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoVideoCapture"
 echo [INFO] APT Do args:%AptDoArgs%
+set "DeviceArg="
+if not "%DeviceId%"=="" set "DeviceArg=-devices=%DeviceId%"
+if defined DeviceArg echo [INFO] DeviceArg="%DeviceArg%"
 
 if /I "%RunMode%"=="Packaged" goto RunPackaged
 if /I "%RunMode%"=="Editor" goto RunEditor
@@ -76,9 +85,9 @@ call "%RunUATBat%" RunUnreal ^
   -build="%BuildDir%" ^
   -skipdeploy ^
   -configuration="%Configuration%" ^
-  -platform=PS5 ^
-  -target="ProjectPBZ" ^
-  -devices=%PS5DeviceIp% ^
+  -platform=%Platform% ^
+  -target="%TargetName%" ^
+  !DeviceArg! ^
   -maxduration=%MaxDuration% ^
   -unattended ^
   -verbose ^

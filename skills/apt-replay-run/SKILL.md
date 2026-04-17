@@ -1,9 +1,9 @@
 ---
-name: ps5-apt-replay-run
-description: Run PS5 AutomatedPerfTest replay workflows through a pure Windows .bat setup with editable config file and no PowerShell dependency. Use when users ask to run UE RunUAT replay perf tests, inject paths/device/map/replay/build settings, parameterize repeated PS5 APT jobs, automate "write config then call bat" flows, or give short commands like "跑APT", "开跑APT", "run apt".
+name: apt-replay-run
+description: Run AutomatedPerfTest replay workflows through a pure Windows .bat setup with editable config file and no PowerShell dependency. Use when users ask to run UE RunUAT replay perf tests, inject paths/device/map/replay/build settings, parameterize repeated APT jobs, automate "write config then call bat" flows, or give short commands like "跑APT", "开跑APT", "run apt".
 ---
 
-# PS5 APT Replay Run
+# APT Replay Run
 
 ## Pure BAT Workflow
 
@@ -47,19 +47,19 @@ If these paths and values are correct for your machine, user can directly say `�
 ## Command
 
 ```bat
-.agents\skills\ps5-apt-replay-run\references\run_replay.bat
+.agents\skills\apt-replay-run\references\run_replay.bat
 ```
 
 ```bat
-.agents\skills\ps5-apt-replay-run\references\run_replay.bat "F:\path\to\custom.config.cmd"
+.agents\skills\apt-replay-run\references\run_replay.bat "F:\path\to\custom.config.cmd"
 ```
 
 ```bat
-.agents\skills\ps5-apt-replay-run\references\run_replay_packaged.bat
+.agents\skills\apt-replay-run\references\run_replay_packaged.bat
 ```
 
 ```bat
-.agents\skills\ps5-apt-replay-run\references\run_replay_editor.bat
+.agents\skills\apt-replay-run\references\run_replay_editor.bat
 ```
 
 ## Notes
@@ -72,3 +72,4 @@ If these paths and values are correct for your machine, user can directly say `�
   - `SourceProfiling`: source `profiling` folder to collect from after test run.
   - `ArchiveRoot`: destination root; script creates `ArchiveRoot\\yyyy-M-d-HHmm\\profiling`.
 - APT capture toggles live in `apt.config.cmd`: `DoInsightsTrace` defaults to `true`; `DoCSVProfiler`, `DoFPSChart`, `DoLLM`, `DoGPUPerf`, `DoGPUReshape`, and `DoVideoCapture` default to `false`.
+- Packaged platform keys live in `apt.config.cmd`: `Platform` defaults to `PS5`, `TargetName` defaults to `ProjectPBZ`, and `DeviceId` defaults to the PS5 device id. For Win64 packaged runs, update these together with `BuildDir` as needed.

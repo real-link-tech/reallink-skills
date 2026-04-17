@@ -4,10 +4,13 @@ rem Editable APT config (pure bat). Keep this file ANSI/ASCII to avoid cmd encod
 set "EnginePath=D:\UnrealEngine"
 set "ProjectPath=E:\PBZ\ProjectPBZ"
 set "RunMode=Packaged"
+set "Platform=PS5"
+set "TargetName=ProjectPBZ"
 set "REPLAY_PATH=\\192.168.0.7\store\APT\ReplayFiles\到少年左殇进seq前.replay"
 set "MapName=PBZ_WP_ZhuLinGuWu"
 set "PS5Target=192.168.103.108"
 set "PS5DeviceIp=PS5:192.168.103.108"
+set "DeviceId=PS5:192.168.103.108"
 
 set "Configuration=Test"
 set "MaxDuration=3600"
