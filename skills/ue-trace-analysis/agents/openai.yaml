@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Trace Analysis"
+  short_description: "Analyze Unreal .utrace files and summarize hotspots."
+  default_prompt: "Use $ue-trace-analysis to inspect this .utrace file and summarize the main bottlenecks."
