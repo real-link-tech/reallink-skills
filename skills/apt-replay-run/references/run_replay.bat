@@ -12,20 +12,14 @@ if defined RequestedRunMode set "RunMode=%RequestedRunMode%"
 
 if not defined EnginePath set "EnginePath=D:\UnrealEngine"
 if not defined ProjectPath set "ProjectPath=E:\PBZ\ProjectPBZ"
-if not defined RunMode set "RunMode=Packaged"
-if not defined Platform set "Platform=PS5"
-if not defined TargetName set "TargetName=ProjectPBZ"
 if not defined REPLAY_PATH set "REPLAY_PATH=\\192.168.0.7\store\APT\ReplayFiles\sample.replay"
-if not defined MapName set "MapName=PBZ_WP_ZhuLinGuWu"
 if not defined PS5Target set "PS5Target=192.168.103.108"
-if not defined PS5DeviceIp set "PS5DeviceIp=PS5:%PS5Target%"
-if not defined DeviceId set "DeviceId=%PS5DeviceIp%"
 if not defined Configuration set "Configuration=Test"
 if not defined MaxDuration set "MaxDuration=3600"
-if not defined BuildDir set "BuildDir=\\192.168.103.61\builds_ps\PS5\Test\BuildName\CL-123456_JKS-0000"
+if not defined PS5BuildDir set "PS5BuildDir=\\192.168.103.61\builds_ps\PS5\Test\BuildName\CL-123456_JKS-0000"
+if not defined PCBuildDir set "PCBuildDir=%ProjectPath%\Saved\StagedBuilds\Windows"
 if not defined Iterations set "Iterations=1"
 if not defined ExecCmds set "ExecCmds=Reallink.ProfileMatrix.SuspendCVarsRefresh 1;r.DynamicRes.OperationMode 0;"
-if not defined TestID set "TestID=APT"
 if not defined DoInsightsTrace set "DoInsightsTrace=true"
 if not defined DoCSVProfiler set "DoCSVProfiler=false"
 if not defined DoFPSChart set "DoFPSChart=false"
@@ -33,20 +27,48 @@ if not defined DoLLM set "DoLLM=false"
 if not defined DoGPUPerf set "DoGPUPerf=false"
 if not defined DoGPUReshape set "DoGPUReshape=false"
 if not defined DoVideoCapture set "DoVideoCapture=false"
-if not defined SourceProfiling set "SourceProfiling=%ProjectPath%\Saved\Profiling"
+if not defined PS5SourceProfiling set "PS5SourceProfiling=P:\%PS5Target%\devlog\app\projectpbz\projectpbz\saved\profiling"
+if not defined PCSourceProfiling set "PCSourceProfiling=%ProjectPath%\Saved\Profiling"
 if not defined ArchiveRoot set "ArchiveRoot=\\192.168.0.7\store\APT\Report"
-if not defined EditorExe set "EditorExe=%EnginePath%\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
-if not defined EditorTestName set "EditorTestName=AutomatedPerfTest.ReplayTest"
+
+set "AptConfiguration=%Configuration%"
+set "AptTestID=APT"
+
+set "Configuration="
 
 set "EnginePath=%EnginePath:"=%"
 set "RunMode=%RunMode:"=%"
-set "Platform=%Platform:"=%"
 if "%EnginePath%"=="" set "EnginePath=D:\UnrealEngine"
+
+if not defined RunMode set "RunMode=PS5"
+if /I "%RunMode%"=="PS5" (
+  set "AptPlatform=PS5"
+  set "AptTargetName=ProjectPBZ"
+  set "AptBuildDir=%PS5BuildDir%"
+  set "AptSourceProfiling=%PS5SourceProfiling%"
+)
+if /I "%RunMode%"=="PC" (
+  set "AptPlatform=Win64"
+  set "AptTargetName=ProjectPBZ"
+  set "AptBuildDir=%PCBuildDir%"
+  set "AptSourceProfiling=%PCSourceProfiling%"
+)
+if not defined AptPlatform (
+  echo [ERROR] Invalid RunMode: "%RunMode%". Use PS5 or PC.
+  endlocal & exit /b 2
+)
+
+set "MSBUILDDISABLENODEREUSE=1"
+set "DOTNET_CLI_TELEMETRY_OPTOUT=1"
+set "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"
+call "%EnginePath%\Engine\Build\BatchFiles\GetDotnetPath.bat" >nul 2>&1
+dotnet build-server shutdown >nul 2>&1
 
 echo [INFO] RunMode="%RunMode%"
 echo [INFO] EnginePath="%EnginePath%"
-echo [INFO] Platform="%Platform%"
-echo [INFO] TargetName="%TargetName%"
+echo [INFO] Platform="%AptPlatform%"
+echo [INFO] TargetName="%AptTargetName%"
+if /I "%AptPlatform%"=="PS5" echo [INFO] PS5Target="%PS5Target%"
 
 set "AptDoArgs="
 if /I "%DoInsightsTrace%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoInsightsTrace"
@@ -65,28 +87,26 @@ if /I "%DoVideoCapture%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.D
 if "%DoVideoCapture%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoVideoCapture"
 echo [INFO] APT Do args:%AptDoArgs%
 set "DeviceArg="
-if not "%DeviceId%"=="" set "DeviceArg=-devices=%DeviceId%"
+if /I "%AptPlatform%"=="PS5" if not "%PS5Target%"=="" set "DeviceArg=-devices=PS5:%PS5Target%"
 if defined DeviceArg echo [INFO] DeviceArg="%DeviceArg%"
 
-if /I "%RunMode%"=="Packaged" goto RunPackaged
-if /I "%RunMode%"=="Editor" goto RunEditor
-echo [ERROR] Invalid RunMode: "%RunMode%". Use Packaged or Editor.
-endlocal & exit /b 2
+if /I "%RunMode%"=="PS5" goto RunPS5
+if /I "%RunMode%"=="PC" goto RunPC
 
-:RunPackaged
+:RunPS5
 set "RunUATBat=%EnginePath%\Engine\Build\BatchFiles\RunUAT.bat"
 if not exist "%RunUATBat%" (
   echo [ERROR] RunUAT.bat not found: "%RunUATBat%"
   endlocal & exit /b 1
 )
-echo [INFO] Running Packaged APT with strict -skipdeploy (no retry).
+echo [INFO] Running PS5 packaged APT with strict -skipdeploy (no retry).
 call "%RunUATBat%" RunUnreal ^
   -project="%ProjectPath%\ProjectPBZ.uproject" ^
-  -build="%BuildDir%" ^
+  -build="%AptBuildDir%" ^
   -skipdeploy ^
-  -configuration="%Configuration%" ^
-  -platform=%Platform% ^
-  -target="%TargetName%" ^
+  -configuration="%AptConfiguration%" ^
+  -platform=%AptPlatform% ^
+  -target="%AptTargetName%" ^
   !DeviceArg! ^
   -maxduration=%MaxDuration% ^
   -unattended ^
@@ -94,71 +114,89 @@ call "%RunUATBat%" RunUnreal ^
   -ResumeOnCriticalFailure ^
   -Test="AutomatedPerfTest.ReplayTest" ^
   -AutomatedPerfTest.ReplayPerfTest.ReplayName="%REPLAY_PATH%" ^
-  -AutomatedPerfTest.ReplayPerfTest.MapName="%MapName%" ^
   -AutomatedPerfTest.UseShippingInsights="false" ^
-  -AutomatedPerfTest.TestID="%TestID%" ^
+  -AutomatedPerfTest.TestID="%AptTestID%" ^
   -AutomatedPerfTest.IgnoreTestBuildLogging ^
   !AptDoArgs! ^
   -LocalReports ^
   -iterations=%Iterations% ^
-  -map=%MapName% ^
   -Args="" ^
   -ExecCmds="%ExecCmds%" ^
-  -log
+  -log ^
+  -map="/Game/Maps/B02/PBZ_Xigu_WP"
 set "RUN_EXIT=%ERRORLEVEL%"
-echo [INFO] Packaged RunUAT exit code: %RUN_EXIT%
+echo [INFO] PS5 RunUAT exit code: %RUN_EXIT%
 if not "%RUN_EXIT%"=="0" (
-  echo [ERROR] Packaged APT failed. Exit directly.
+  echo [ERROR] PS5 packaged APT failed. Exit directly.
   endlocal & exit /b %RUN_EXIT%
 )
 goto CopyProfiling
 
-:RunEditor
-if not exist "%EditorExe%" (
-  echo [ERROR] UnrealEditor-Cmd.exe not found: "%EditorExe%"
+:RunPC
+set "RunUATBat=%EnginePath%\Engine\Build\BatchFiles\RunUAT.bat"
+if not exist "%RunUATBat%" (
+  echo [ERROR] RunUAT.bat not found: "%RunUATBat%"
   endlocal & exit /b 1
 )
-echo [INFO] Running Editor APT (no deploy/install path).
-call "%EditorExe%" "%ProjectPath%\ProjectPBZ.uproject" ^
+echo [INFO] Running PC packaged APT.
+call "%RunUATBat%" RunUnreal ^
+  -project="%ProjectPath%\ProjectPBZ.uproject" ^
+  -build="%AptBuildDir%" ^
+  -skipdeploy ^
+  -configuration="%AptConfiguration%" ^
+  -platform=%AptPlatform% ^
+  -target="%AptTargetName%" ^
+  -maxduration=%MaxDuration% ^
   -unattended ^
-  -nop4 ^
-  -nosplash ^
-  -nullrhi ^
-  -stdout ^
-  -FullStdOutLogOutput ^
+  -verbose ^
+  -ResumeOnCriticalFailure ^
+  -Test="AutomatedPerfTest.ReplayTest" ^
   -AutomatedPerfTest.ReplayPerfTest.ReplayName="%REPLAY_PATH%" ^
-  -AutomatedPerfTest.ReplayPerfTest.MapName="%MapName%" ^
   -AutomatedPerfTest.UseShippingInsights="false" ^
-  -AutomatedPerfTest.TestID="%TestID%" ^
+  -AutomatedPerfTest.TestID="%AptTestID%" ^
   -AutomatedPerfTest.IgnoreTestBuildLogging ^
   !AptDoArgs! ^
+  -LocalReports ^
   -iterations=%Iterations% ^
-  -ExecCmds="Automation RunTests %EditorTestName%;Quit" ^
-  -log
+  -Args="" ^
+  -ExecCmds="%ExecCmds%" ^
+  -log ^
+  -map="/Game/Maps/B02/PBZ_Xigu_WP"
 set "RUN_EXIT=%ERRORLEVEL%"
-echo [INFO] Editor run exit code: %RUN_EXIT%
+echo [INFO] PC RunUAT exit code: %RUN_EXIT%
 if not "%RUN_EXIT%"=="0" (
-  echo [ERROR] Editor APT failed. Exit directly.
+  echo [ERROR] PC packaged APT failed. Exit directly.
   endlocal & exit /b %RUN_EXIT%
 )
 goto CopyProfiling
 
 :CopyProfiling
-if not exist "%SourceProfiling%" (
-  echo [WARN] SourceProfiling not found: "%SourceProfiling%"
+if not exist "%AptSourceProfiling%" (
+  echo [WARN] Source profiling not found: "%AptSourceProfiling%"
   endlocal & exit /b %RUN_EXIT%
 )
 
-for /f %%I in ('powershell -NoProfile -Command Get-Date -Format yyyy-M-d-HHmm') do set "ArchiveStamp=%%I"
-if not defined ArchiveStamp (
-  echo [WARN] Failed to generate archive timestamp. Skip copy.
+for %%I in ("%AptBuildDir%") do set "ArchiveBuildName=%%~nxI"
+for %%I in ("%REPLAY_PATH%") do set "ArchiveReplayName=%%~nI"
+for /f %%I in ('powershell -NoProfile -Command Get-Date -Format yyyyMMdd') do set "ArchiveDate=%%I"
+if not defined ArchiveBuildName (
+  echo [WARN] Failed to derive build name from AptBuildDir. Skip copy.
+  endlocal & exit /b %RUN_EXIT%
+)
+if not defined ArchiveReplayName (
+  echo [WARN] Failed to derive replay name from REPLAY_PATH. Skip copy.
+  endlocal & exit /b %RUN_EXIT%
+)
+if not defined ArchiveDate (
+  echo [WARN] Failed to generate archive date. Skip copy.
   endlocal & exit /b %RUN_EXIT%
 )
 
-set "ArchiveTarget=%ArchiveRoot%\%ArchiveStamp%\profiling"
+set "ArchiveName=%ArchiveBuildName%_%ArchiveDate%_%ArchiveReplayName%"
+set "ArchiveTarget=%ArchiveRoot%\%ArchiveName%\profiling"
 echo [INFO] Copy profiling -> "%ArchiveTarget%"
 mkdir "%ArchiveTarget%" 2>nul
-robocopy "%SourceProfiling%" "%ArchiveTarget%" /E /R:2 /W:2
+robocopy "%AptSourceProfiling%" "%ArchiveTarget%" /E /R:2 /W:2
 set "ROBO_EXIT=%ERRORLEVEL%"
 if %ROBO_EXIT% GEQ 8 (
   echo [ERROR] Robocopy failed with exit code: %ROBO_EXIT%
