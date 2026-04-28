@@ -69,6 +69,8 @@ echo [INFO] EnginePath="%EnginePath%"
 echo [INFO] Platform="%AptPlatform%"
 echo [INFO] TargetName="%AptTargetName%"
 if /I "%AptPlatform%"=="PS5" echo [INFO] PS5Target="%PS5Target%"
+for /f "delims=" %%I in ('powershell -NoProfile -Command "Get-Date -Format o"') do set "AptRunStartIso=%%I"
+echo [INFO] Run start="%AptRunStartIso%"
 
 set "AptDoArgs="
 if /I "%DoInsightsTrace%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoInsightsTrace"
@@ -178,7 +180,7 @@ if not exist "%AptSourceProfiling%" (
 
 for %%I in ("%AptBuildDir%") do set "ArchiveBuildName=%%~nxI"
 for %%I in ("%REPLAY_PATH%") do set "ArchiveReplayName=%%~nI"
-for /f %%I in ('powershell -NoProfile -Command Get-Date -Format yyyyMMdd') do set "ArchiveDate=%%I"
+for /f %%I in ('powershell -NoProfile -Command Get-Date -Format yyyyMMdd-HHmm') do set "ArchiveDate=%%I"
 if not defined ArchiveBuildName (
   echo [WARN] Failed to derive build name from AptBuildDir. Skip copy.
   endlocal & exit /b %RUN_EXIT%

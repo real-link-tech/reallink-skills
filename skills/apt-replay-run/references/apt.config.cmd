@@ -3,9 +3,12 @@ rem Editable APT config (pure bat). Keep this file ANSI/ASCII to avoid cmd encod
 
 set "EnginePath=D:\UnrealEngine"
 set "ProjectPath=E:\PBZ\ProjectPBZ"
-set "REPLAY_PATH=\\192.168.0.7\store\APT\ReplayFiles\test1.replay"
-set "PS5Target=192.168.103.108"
+rem Replay list for run_replay_batch.bat. Append one replay per line.
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\xuzhang.replay"
+set "REPLAY_LIST=%REPLAY_LIST%;\\192.168.0.7\store\APT\ReplayFiles\xigu.replay"
+set "REPLAY_LIST=%REPLAY_LIST%;\\192.168.0.7\store\APT\ReplayFiles\fuji.replay"
 
+set "PS5Target=192.168.103.108"
 set "Configuration=Test"
 set "MaxDuration=1800"
 set "PS5BuildDir=\\192.168.103.61\builds_ps\PS5\Test\页游包\CL-179700_JKS-8799"
