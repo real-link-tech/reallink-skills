@@ -1,0 +1,4 @@
+interface:
+  display_name: "Streaming Pool JSON HTML"
+  short_description: "Generate texture streaming pool report charts."
+  default_prompt: "Generate an HTML chart from this texture streaming pool NDJSON report."

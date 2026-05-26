@@ -1,8 +1,8 @@
 @echo off
 setlocal
-set "RunMode=PS5"
+set "RunMode=PC"
 if "%~1"=="" (
-  call "%~dp0run_replay_batch.bat" "%~dp0apt.ps5.config.cmd"
+  call "%~dp0run_replay_batch.bat" "%~dp0apt.pc.config.cmd"
 ) else (
   call "%~dp0run_replay_batch.bat" %*
 )

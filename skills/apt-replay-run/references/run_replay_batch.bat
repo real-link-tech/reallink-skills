@@ -2,10 +2,8 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "SCRIPT_DIR=%~dp0"
-set "ConfigFile=%SCRIPT_DIR%apt.config.cmd"
+set "ConfigFile=%SCRIPT_DIR%apt.ps5.config.cmd"
 if not "%~1"=="" set "ConfigFile=%~1"
-set "TempRoot=%TEMP%\apt_replay_batch_%RANDOM%_%RANDOM%"
-mkdir "%TempRoot%" >nul 2>&1
 
 if exist "%ConfigFile%" (
   echo [INFO] Loading batch config from "%ConfigFile%"
@@ -16,21 +14,22 @@ if exist "%ConfigFile%" (
 )
 
 set "ReplayListArg=%REPLAY_LIST%"
-if not defined ReplayListArg set "ReplayListArg=REPLAY_LIST in %ConfigFile%"
 if not "%~2"=="" set "ReplayListArg=%~2"
-
 if not defined ReplayListArg (
   echo [ERROR] REPLAY_LIST is empty. Set REPLAY_LIST in config or pass it as arg2.
-  echo [INFO] REPLAY_LIST accepts semicolon-separated replay paths, or a path to a .txt/.list file.
   endlocal & exit /b 2
 )
 
-set "ReplayInputFile="
-if exist "%ReplayListArg%" set "ReplayInputFile=%ReplayListArg%"
-
+set "TempRoot=%TEMP%\apt_replay_batch_%RANDOM%_%RANDOM%"
+mkdir "%TempRoot%" >nul 2>&1
+set "SummaryFile=%TempRoot%\summary.txt"
 set /a Total=0
 set /a Failed=0
-set "SummaryFile=%TempRoot%\summary.txt"
+
+set "ReplayInputFile="
+for %%I in ("%ReplayListArg%") do set "ReplayInputExt=%%~xI"
+if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".txt" set "ReplayInputFile=%ReplayListArg%"
+if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".list" set "ReplayInputFile=%ReplayListArg%"
 
 echo [INFO] Replay input: "%ReplayListArg%"
 if defined ReplayInputFile echo [INFO] Replay input file: "%ReplayInputFile%"
@@ -78,7 +77,7 @@ copy /Y "%ConfigFile%" "%TempConfig%" >nul
 >> "%TempConfig%" echo set "REPLAY_PATH=%ReplayPath%"
 
 echo [INFO] [!ReplayIndex!] Running replay: "%ReplayPath%"
-call "%SCRIPT_DIR%run_replay.bat" "%TempConfig%"
+call :RunSingleReplay "%TempConfig%"
 set "RC=%ERRORLEVEL%"
 
 if "%RC%"=="0" (
@@ -105,3 +104,208 @@ if not "!ReplayLine!"=="" if not "!ReplayLine:~0,1!"=="#" (
 )
 if defined RemainingReplayList goto RunInlineReplayList
 exit /b 0
+
+:RunSingleReplay
+setlocal EnableExtensions EnableDelayedExpansion
+
+set "SingleConfigFile=%~1"
+set "RequestedRunMode=%RunMode%"
+if exist "%SingleConfigFile%" (
+  echo [INFO] Loading config from "%SingleConfigFile%"
+  call "%SingleConfigFile%"
+) else (
+  echo [ERROR] Config file not found: "%SingleConfigFile%"
+  endlocal & exit /b 2
+)
+if defined RequestedRunMode set "RunMode=%RequestedRunMode%"
+
+if not defined EnginePath set "EnginePath=D:\UnrealEngine"
+if not defined ProjectPath set "ProjectPath=E:\PBZ\ProjectPBZ"
+if not defined REPLAY_PATH set "REPLAY_PATH=\\192.168.0.7\store\APT\ReplayFiles\sample.replay"
+if not defined PS5Target set "PS5Target=192.168.103.108"
+if not defined Configuration set "Configuration=Test"
+if not defined MaxDuration set "MaxDuration=3600"
+if not defined PS5BuildDir set "PS5BuildDir=\\192.168.103.61\builds_ps\PS5\Test\BuildName\CL-123456_JKS-0000"
+if not defined PCBuildDir set "PCBuildDir=%ProjectPath%\Saved\StagedBuilds\Windows"
+if not defined Iterations set "Iterations=1"
+if not defined ExecCmds set "ExecCmds="
+if not defined ExtraArgs set "ExtraArgs="
+if not defined DoInsightsTrace set "DoInsightsTrace=true"
+if not defined DoCSVProfiler set "DoCSVProfiler=false"
+if not defined DoFPSChart set "DoFPSChart=false"
+if not defined DoLLM set "DoLLM=false"
+if not defined DoGPUPerf set "DoGPUPerf=false"
+if not defined DoGPUReshape set "DoGPUReshape=false"
+if not defined DoVideoCapture set "DoVideoCapture=false"
+if not defined PS5SourceProfiling set "PS5SourceProfiling=P:\%PS5Target%\devlog\app\projectpbz\projectpbz\saved\profiling"
+if not defined PCSourceProfiling set "PCSourceProfiling=%ProjectPath%\Saved\Profiling"
+if not defined ArchiveRoot set "ArchiveRoot=\\192.168.0.7\store\APT\Report"
+
+set "AptConfiguration=%Configuration%"
+set "AptTestID=APT"
+set "Configuration="
+
+set "EnginePath=%EnginePath:"=%"
+set "RunMode=%RunMode:"=%"
+if "%EnginePath%"=="" set "EnginePath=D:\UnrealEngine"
+if not defined RunMode set "RunMode=PS5"
+
+if /I "%RunMode%"=="PS5" (
+  set "AptPlatform=PS5"
+  set "AptTargetName=ProjectPBZ"
+  set "AptBuildDir=%PS5BuildDir%"
+  set "AptSourceProfiling=%PS5SourceProfiling%"
+)
+if /I "%RunMode%"=="PC" (
+  set "AptPlatform=Win64"
+  set "AptTargetName=ProjectPBZ"
+  set "AptBuildDir=%PCBuildDir%"
+  set "AptSourceProfiling=%PCSourceProfiling%"
+)
+if not defined AptPlatform (
+  echo [ERROR] Invalid RunMode: "%RunMode%". Use PS5 or PC.
+  endlocal & exit /b 2
+)
+
+set "MSBUILDDISABLENODEREUSE=1"
+set "DOTNET_CLI_TELEMETRY_OPTOUT=1"
+set "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"
+call "%EnginePath%\Engine\Build\BatchFiles\GetDotnetPath.bat" >nul 2>&1
+dotnet build-server shutdown >nul 2>&1
+
+echo [INFO] RunMode="%RunMode%"
+echo [INFO] EnginePath="%EnginePath%"
+echo [INFO] Platform="%AptPlatform%"
+echo [INFO] TargetName="%AptTargetName%"
+echo [INFO] ExtraArgs="%ExtraArgs%"
+if /I "%AptPlatform%"=="PS5" echo [INFO] PS5Target="%PS5Target%"
+
+set "AptDoArgs="
+if /I "%DoInsightsTrace%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoInsightsTrace"
+if "%DoInsightsTrace%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoInsightsTrace"
+if /I "%DoCSVProfiler%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoCSVProfiler"
+if "%DoCSVProfiler%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoCSVProfiler"
+if /I "%DoFPSChart%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoFPSChart"
+if "%DoFPSChart%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoFPSChart"
+if /I "%DoLLM%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoLLM"
+if "%DoLLM%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoLLM"
+if /I "%DoGPUPerf%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoGPUPerf"
+if "%DoGPUPerf%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoGPUPerf"
+if /I "%DoGPUReshape%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoGPUReshape"
+if "%DoGPUReshape%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoGPUReshape"
+if /I "%DoVideoCapture%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoVideoCapture"
+if "%DoVideoCapture%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoVideoCapture"
+echo [INFO] APT Do args:%AptDoArgs%
+
+set "DeviceArg="
+if /I "%AptPlatform%"=="PS5" if not "%PS5Target%"=="" set "DeviceArg=-devices=PS5:%PS5Target%"
+if defined DeviceArg echo [INFO] DeviceArg="%DeviceArg%"
+
+set "RunUATBat=%EnginePath%\Engine\Build\BatchFiles\RunUAT.bat"
+if not exist "%RunUATBat%" (
+  echo [ERROR] RunUAT.bat not found: "%RunUATBat%"
+  endlocal & exit /b 1
+)
+
+if /I "%RunMode%"=="PS5" (
+  echo [INFO] Running PS5 packaged APT with strict -skipdeploy.
+  call "%RunUATBat%" RunUnreal ^
+    -project="%ProjectPath%\ProjectPBZ.uproject" ^
+    -build="%AptBuildDir%" ^
+    -skipdeploy ^
+    -configuration="%AptConfiguration%" ^
+    -platform=%AptPlatform% ^
+    -target="%AptTargetName%" ^
+    !DeviceArg! ^
+    -maxduration=%MaxDuration% ^
+    -unattended ^
+    -verbose ^
+    -ResumeOnCriticalFailure ^
+    -Test="AutomatedPerfTest.ReplayTest" ^
+    -AutomatedPerfTest.ReplayPerfTest.ReplayName="%REPLAY_PATH%" ^
+    -AutomatedPerfTest.UseShippingInsights="false" ^
+    -AutomatedPerfTest.TestID="%AptTestID%" ^
+    -AutomatedPerfTest.IgnoreTestBuildLogging ^
+    !AptDoArgs! ^
+    -LocalReports ^
+    -iterations=%Iterations% ^
+    -Args="%ExtraArgs%" ^
+    -ExecCmds="%ExecCmds%" ^
+    -log ^
+    -map="/Game/Maps/B02/PBZ_Xigu_WP"
+  set "RUN_EXIT=!ERRORLEVEL!"
+) else (
+  echo [INFO] Running PC packaged APT.
+  call "%RunUATBat%" RunUnreal ^
+    -project="%ProjectPath%\ProjectPBZ.uproject" ^
+    -build="%AptBuildDir%" ^
+    -skipdeploy ^
+    -configuration="%AptConfiguration%" ^
+    -platform=%AptPlatform% ^
+    -target="%AptTargetName%" ^
+    -maxduration=%MaxDuration% ^
+    -unattended ^
+    -verbose ^
+    -ResumeOnCriticalFailure ^
+    -Test="AutomatedPerfTest.ReplayTest" ^
+    -AutomatedPerfTest.ReplayPerfTest.ReplayName="%REPLAY_PATH%" ^
+    -AutomatedPerfTest.UseShippingInsights="false" ^
+    -AutomatedPerfTest.TestID="%AptTestID%" ^
+    -AutomatedPerfTest.IgnoreTestBuildLogging ^
+    !AptDoArgs! ^
+    -LocalReports ^
+    -iterations=%Iterations% ^
+    -Args="%ExtraArgs%" ^
+    -ExecCmds="%ExecCmds%" ^
+    -log ^
+    -map="/Game/Maps/B02/PBZ_Xigu_WP"
+  set "RUN_EXIT=!ERRORLEVEL!"
+)
+echo [INFO] %RunMode% RunUAT exit code: %RUN_EXIT%
+if not "%RUN_EXIT%"=="0" (
+  echo [ERROR] %RunMode% packaged APT failed.
+  endlocal & exit /b %RUN_EXIT%
+)
+
+if /I "%RunMode%"=="PC" (
+  set "GauntletClientProfiling=%EnginePath%\GauntletTemp\Logs\AutomatedPerfTest.ReplayTest_(Win64_Test_Client)\Client\Profiling"
+  if exist "!GauntletClientProfiling!" (
+    set "AptSourceProfiling=!GauntletClientProfiling!"
+  )
+)
+
+for %%I in ("%AptBuildDir%") do set "ArchiveBuildName=%%~nxI"
+for %%I in ("%REPLAY_PATH%") do set "ArchiveReplayName=%%~nI"
+for /f %%I in ('powershell -NoProfile -Command Get-Date -Format yyyyMMdd-HHmm') do set "ArchiveDate=%%I"
+if not defined ArchiveBuildName (
+  echo [WARN] Failed to derive build name from AptBuildDir. Skip copy.
+  endlocal & exit /b %RUN_EXIT%
+)
+if not defined ArchiveReplayName (
+  echo [WARN] Failed to derive replay name from REPLAY_PATH. Skip copy.
+  endlocal & exit /b %RUN_EXIT%
+)
+if not defined ArchiveDate (
+  echo [WARN] Failed to generate archive date. Skip copy.
+  endlocal & exit /b %RUN_EXIT%
+)
+
+set "ArchiveName=%ArchiveBuildName%_%ArchiveDate%_%ArchiveReplayName%"
+set "ArchiveTargetRoot=%ArchiveRoot%\%ArchiveName%"
+
+if exist "%AptSourceProfiling%" (
+  set "ArchiveProfilingTarget=%ArchiveTargetRoot%\profiling"
+  echo [INFO] Copy profiling -^> "!ArchiveProfilingTarget!"
+  mkdir "!ArchiveProfilingTarget!" 2>nul
+  robocopy "%AptSourceProfiling%" "!ArchiveProfilingTarget!" /E /R:2 /W:2
+  set "ROBO_EXIT=!ERRORLEVEL!"
+  if !ROBO_EXIT! GEQ 8 (
+    echo [ERROR] Profiling robocopy failed with exit code: !ROBO_EXIT!
+    endlocal & exit /b !ROBO_EXIT!
+  )
+  echo [INFO] Profiling archived. Robocopy exit code: !ROBO_EXIT!
+) else (
+  echo [WARN] Source profiling not found: "%AptSourceProfiling%"
+)
+
+endlocal & exit /b %RUN_EXIT%

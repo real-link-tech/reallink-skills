@@ -1,0 +1,8 @@
+interface:
+  display_name: "VT JSON HTML"
+  short_description: "Generate per-pool VT HTML charts."
+  brand_color: "#2563EB"
+  default_prompt: "Use $vt-json-html to convert this VT NDJSON report into per-pool HTML curves with pool size and visible usage in MB."
+
+policy:
+  allow_implicit_invocation: true
