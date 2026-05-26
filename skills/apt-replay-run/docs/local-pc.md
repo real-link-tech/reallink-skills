@@ -19,7 +19,7 @@ references\apt.remote-pc.config.cmd
 ```bat
 set "EnginePath=D:\UnrealEngine"
 set "ProjectPath=E:\PBZ\ProjectPBZ"
-set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\xuzhang.replay"
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\zxrzhulin.replay"
 
 set "Configuration=Test"
 set "MaxDuration=1800"

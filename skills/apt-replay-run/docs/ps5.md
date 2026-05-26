@@ -13,7 +13,7 @@ references\apt.ps5.config.cmd
 ```bat
 set "EnginePath=D:\UnrealEngine"
 set "ProjectPath=E:\PBZ\ProjectPBZ"
-set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\xuzhang.replay"
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\zxrzhulin.replay"
 
 set "PS5Target=192.168.103.108"
 set "Configuration=Test"

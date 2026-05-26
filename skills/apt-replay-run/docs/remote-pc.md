@@ -53,7 +53,7 @@ set "RemoteUser=192.168.103.33\a"
 set "PCBuildDir=D:\PBZ_PC\Win64_189198-9493\189198-9493"
 set "PCExe=D:\PBZ_PC\Win64_189198-9493\189198-9493\Windows\ProjectPBZ\Binaries\Win64\ProjectPBZ-Win64-Test.exe"
 set "PCBuildName=189198-9493"
-set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\xuzhang.replay"
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\zxrzhulin.replay"
 set "ArchiveRoot=\\192.168.0.7\store\APT\Report"
 set "WorkRoot=D:\APTWork"
 ```
