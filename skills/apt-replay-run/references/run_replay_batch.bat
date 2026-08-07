@@ -4,6 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "ConfigFile=%SCRIPT_DIR%apt.ps5.config.cmd"
 if not "%~1"=="" set "ConfigFile=%~1"
+set "RuntimeExtraArgs=%~3"
 
 if exist "%ConfigFile%" (
   echo [INFO] Loading batch config from "%ConfigFile%"
@@ -130,7 +131,9 @@ if not defined PCBuildDir set "PCBuildDir=%ProjectPath%\Saved\StagedBuilds\Windo
 if not defined Iterations set "Iterations=1"
 if not defined ExecCmds set "ExecCmds="
 if not defined ExtraArgs set "ExtraArgs="
-if not defined DoInsightsTrace set "DoInsightsTrace=true"
+if defined RuntimeExtraArgs if defined ExtraArgs set "ExtraArgs=!ExtraArgs! !RuntimeExtraArgs!"
+if defined RuntimeExtraArgs if not defined ExtraArgs set "ExtraArgs=!RuntimeExtraArgs!"
+if not defined DoInsightsTrace set "DoInsightsTrace=false"
 if not defined DoCSVProfiler set "DoCSVProfiler=false"
 if not defined DoFPSChart set "DoFPSChart=false"
 if not defined DoLLM set "DoLLM=false"
@@ -183,8 +186,8 @@ if /I "%AptPlatform%"=="PS5" echo [INFO] PS5Target="%PS5Target%"
 set "AptDoArgs="
 if /I "%DoInsightsTrace%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoInsightsTrace"
 if "%DoInsightsTrace%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoInsightsTrace"
-if /I "%DoCSVProfiler%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoCSVProfiler"
-if "%DoCSVProfiler%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoCSVProfiler"
+if /I "%DoCSVProfiler%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoCSVProfiler -csvGpuStats"
+if "%DoCSVProfiler%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoCSVProfiler -csvGpuStats"
 if /I "%DoFPSChart%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoFPSChart"
 if "%DoFPSChart%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoFPSChart"
 if /I "%DoLLM%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoLLM"
@@ -195,6 +198,7 @@ if /I "%DoGPUReshape%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoG
 if "%DoGPUReshape%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoGPUReshape"
 if /I "%DoVideoCapture%"=="true" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoVideoCapture"
 if "%DoVideoCapture%"=="1" set "AptDoArgs=!AptDoArgs! -AutomatedPerfTest.DoVideoCapture"
+
 echo [INFO] APT Do args:%AptDoArgs%
 
 set "DeviceArg="

@@ -39,7 +39,8 @@ set "ExtraArgs=-NLPEnable -NLPRef=local -NLPLocalIP=localhost -VTPoolReport -Str
 rem ---------------------------------------------------------------------------
 rem APT capture toggles. Same names as apt.pc.config.cmd.
 rem ---------------------------------------------------------------------------
-set "DoInsightsTrace=true"
+rem Insights Trace is opt-in. Enable it only in a temporary config for an explicit Trace run.
+set "DoInsightsTrace=false"
 set "DoCSVProfiler=false"
 set "DoFPSChart=false"
 set "DoLLM=false"

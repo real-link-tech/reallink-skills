@@ -74,6 +74,15 @@ set "ExtraArgs=-ResX=1920 -ResY=1080 -ForceRes -NoVSync"
 references\run_replay_ps5.bat
 ```
 
+只给本次运行追加游戏命令行参数：
+
+```bat
+references\run_replay_ps5.bat --extra-args "-VTPoolReport"
+references\run_replay_ps5.bat --extra-args "-test1 -test2"
+```
+
+`--extra-args` 会追加到配置里的 `ExtraArgs`，不会覆盖或写回配置。
+
 ## 常见问题
 
 ### 找不到 Engine 或 Project

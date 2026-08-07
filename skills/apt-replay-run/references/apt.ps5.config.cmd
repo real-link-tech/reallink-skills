@@ -17,7 +17,8 @@ set "ExecCmds="
 rem apt没办法应用默认推荐设置，所以这里用本地配置应用
 set "ExtraArgs=-NLPEnable -NLPRef=local -NLPLocalIP=localhost -VTPoolReport -StreamingPoolReport"
 
-set "DoInsightsTrace=true"
+rem Insights Trace is opt-in. Enable it only in a temporary config for an explicit Trace run.
+set "DoInsightsTrace=false"
 set "DoCSVProfiler=false"
 set "DoFPSChart=false"
 set "DoLLM=false"
