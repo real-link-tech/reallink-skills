@@ -214,7 +214,6 @@ mkdir "%LogDir%" >nul 2>&1
 pushd "%PCExeDir%" >nul
 call "%PCExe%" "%MapPath%" ^
   -keepscreenawake ^
-  -deterministic ^
   -AutomatedPerfTest.TestID="APT" ^
   -statnamedevents ^
   !AptDoArgs! ^
