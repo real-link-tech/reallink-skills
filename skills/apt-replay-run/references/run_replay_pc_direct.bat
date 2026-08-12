@@ -163,9 +163,11 @@ set "ReplayListArg=%REPLAY_LIST%"
 if not "%~2"=="" set "ReplayListArg=%~2"
 
 set "ReplayInputFile="
+set "ReplayInputDirectory="
+if exist "%ReplayListArg%\*" set "ReplayInputDirectory=%ReplayListArg%"
 for %%I in ("%ReplayListArg%") do set "ReplayInputExt=%%~xI"
-if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".txt" set "ReplayInputFile=%ReplayListArg%"
-if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".list" set "ReplayInputFile=%ReplayListArg%"
+if not defined ReplayInputDirectory if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".txt" set "ReplayInputFile=%ReplayListArg%"
+if not defined ReplayInputDirectory if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".list" set "ReplayInputFile=%ReplayListArg%"
 
 set /a Total=0
 set /a Failed=0
@@ -191,7 +193,14 @@ if /I "!GPUReshapeEnabled!"=="true" echo [INFO] GPUReshape mode enabled: executa
 if /I "!GPUPerfEnabled!"=="true" if /I "!GPUReshapeEnabled!"=="true" echo [WARN] GPUReshape instrumentation affects GPU timings. Treat GPUPerf numbers from this combined run as diagnostic only.
 echo.
 
-if defined ReplayInputFile (
+if defined ReplayInputDirectory (
+  echo [INFO] Replay input directory="%ReplayInputDirectory%"
+  for /f "delims=" %%R in ('dir /b /s /a-d "!ReplayInputDirectory!\*.replay" 2^>nul ^| sort') do (
+    set /a Total+=1
+    call :RunOneReplay "%%R" !Total!
+    if errorlevel 1 set /a Failed+=1
+  )
+) else if defined ReplayInputFile (
   echo [INFO] Replay input file="%ReplayInputFile%"
   for /f "usebackq delims=" %%R in ("%ReplayInputFile%") do (
     set "ReplayLine=%%R"

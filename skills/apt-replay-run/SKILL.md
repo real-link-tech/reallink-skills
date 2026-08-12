@@ -116,19 +116,19 @@ Remote PC does not read `apt.pc.config.cmd`. Duplicate needed PC package fields 
 
 ## Replay List
 
-Use `REPLAY_LIST` for daily runs. It accepts:
+Use `REPLAY_LIST` for daily runs. The default is the shared replay root; directories are searched recursively for `.replay` files and run in sorted full-path order:
 
 ```bat
-set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\xuzhang.replay"
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles"
 ```
+
+`REPLAY_LIST` also accepts one replay file, multiple replay files separated by semicolons, or a `.txt`/`.list` manifest with one replay path per line. A directory that contains no `.replay` files is an error and must not launch the package.
 
 Multiple replay files can be separated by semicolons:
 
 ```bat
 set "REPLAY_LIST=\\server\a.replay;\\server\b.replay"
 ```
-
-Or set `REPLAY_LIST` to a `.txt` or `.list` file with one replay path per line.
 
 ## Launch Args
 

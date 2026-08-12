@@ -19,7 +19,7 @@ references\apt.remote-pc.config.cmd
 ```bat
 set "EnginePath=D:\UnrealEngine"
 set "ProjectPath=E:\PBZ\ProjectPBZ"
-set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\zxrzhulin.replay"
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles"
 
 set "Configuration=Test"
 set "MaxDuration=1800"
@@ -37,7 +37,7 @@ set "PCSourceProfiling=%ProjectPath%\Saved\Profiling"
 
 - `EnginePath`: 本机 UnrealEngine 路径。
 - `ProjectPath`: 本机 ProjectPBZ 工程路径。
-- `REPLAY_LIST`: replay 路径。可以是一个 `.replay`，也可以用分号写多个。
+- `REPLAY_LIST`: replay 输入。默认共享目录会递归查找所有子目录中的 `.replay` 并按完整路径排序；也可以指定一个 `.replay`、分号分隔的多个文件或 `.txt/.list` 清单。
 - `PCBuildDir`: 本地 Win64 包体目录。
 - `ExecCmds`: 游戏启动后执行的 UE 控制台命令。
 - `QualityCVars`: 可选的整数画质覆盖，留空时使用当前默认画质。

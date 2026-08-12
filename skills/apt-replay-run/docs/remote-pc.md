@@ -53,7 +53,7 @@ set "RemoteUser=192.168.103.33\a"
 set "PCBuildDir=D:\PBZ_PC\Win64_189198-9493\189198-9493"
 set "PCExe=D:\PBZ_PC\Win64_189198-9493\189198-9493\Windows\ProjectPBZ\Binaries\Win64\ProjectPBZ-Win64-Test.exe"
 set "PCBuildName=189198-9493"
-set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\zxrzhulin.replay"
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles"
 set "ArchiveRoot=\\192.168.0.7\store\APT\Report"
 set "WorkRoot=D:\APTWork"
 ```
@@ -67,7 +67,7 @@ set "WorkRoot=D:\APTWork"
 - `PCBuildDir`: 远端电脑上的 Win64 包体目录。注意不是本机路径。
 - `PCExe`: 远端电脑上的游戏 exe 完整路径。
 - `PCBuildName`: 归档目录里显示的包名。
-- `REPLAY_LIST`: 远端电脑能访问到的 replay 路径。
+- `REPLAY_LIST`: 远端电脑能访问到的 replay 输入。默认共享目录会递归查找所有子目录中的 `.replay` 并按完整路径排序；也可以指定单个文件、分号列表或 `.txt/.list` 清单。
 - `ArchiveRoot`: 远端电脑能写入的报告归档目录。
 - `WorkRoot`: 远端电脑本地工作目录。
 
@@ -227,7 +227,7 @@ set "PCExe=..."
 远端电脑必须能访问这些共享路径：
 
 ```bat
-set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles\xuzhang.replay"
+set "REPLAY_LIST=\\192.168.0.7\store\APT\ReplayFiles"
 set "ArchiveRoot=\\192.168.0.7\store\APT\Report"
 ```
 

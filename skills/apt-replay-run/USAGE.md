@@ -30,7 +30,7 @@ Replay 一般生成在包体的 `Saved\Demos` 下，也可以使用共享目录�
 
 运行前至少确认：
 
-- `REPLAY_LIST`：一个 Replay、分号分隔的多个 Replay，或 `.txt/.list` 清单。
+- `REPLAY_LIST`：默认是 `\\192.168.0.7\store\APT\ReplayFiles`；目录会递归查找子目录中的 `.replay`，也可以指定单个 Replay、分号分隔的多个 Replay，或 `.txt/.list` 清单。
 - PC：`PCBuildDir`、`PCExe`、`PCBuildName`。
 - PS5：`PS5Target`、`PS5BuildDir`、`PS5SourceProfiling`。
 - 远程 PC：远端机器上的 `PCBuildDir`、`PCExe`、`WorkRoot`。

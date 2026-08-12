@@ -24,8 +24,8 @@ set "RunMode=RemotePC"
 set "PCBuildDir=D:\PBZ_PC\Win64_189198-9493\189198-9493"
 set "PCExe=D:\PBZ_PC\Win64_189198-9493\189198-9493\Windows\ProjectPBZ\Binaries\Win64\ProjectPBZ-Win64-Test.exe"
 set "PCBuildName=189198-9493"
-set "Replay_Path=\\192.168.0.7\store\APT\ReplayFiles\"
-set "REPLAY_LIST=%Replay_Path%zxrzhulin.replay"
+set "Replay_Path=\\192.168.0.7\store\APT\ReplayFiles"
+set "REPLAY_LIST=%Replay_Path%"
 
 rem ---------------------------------------------------------------------------
 rem Game launch settings. Target mode does not provide defaults for these.

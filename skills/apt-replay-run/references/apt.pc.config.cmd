@@ -5,11 +5,8 @@ rem Keep this file CRLF.
 set "EnginePath=D:\UnrealEngine"
 set "ProjectPath=E:\PBZ\ProjectPBZ"
 set "RunMode=PC"
-set "Replay_Path=\\192.168.0.7\store\APT\ReplayFiles\"
-set "REPLAY_LIST=%Replay_Path%xuesesinlin\xuesesenlin_1.replay"
-set "REPLAY_LIST=%Replay_Path%xuesesinlin\xuesesenlin_2.replay"
-set "REPLAY_LIST=%Replay_Path%xuesesinlin\xuesesenlin_3.replay"
-set "REPLAY_LIST=%Replay_Path%xuesesinlin\xuesesenlin_4.replay"
+set "Replay_Path=\\192.168.0.7\store\APT\ReplayFiles"
+set "REPLAY_LIST=%Replay_Path%"
 
 set "Configuration=Test"
 set "MaxDuration=1800"

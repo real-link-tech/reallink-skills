@@ -28,16 +28,25 @@ set /a Total=0
 set /a Failed=0
 
 set "ReplayInputFile="
+set "ReplayInputDirectory="
+if exist "%ReplayListArg%\*" set "ReplayInputDirectory=%ReplayListArg%"
 for %%I in ("%ReplayListArg%") do set "ReplayInputExt=%%~xI"
-if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".txt" set "ReplayInputFile=%ReplayListArg%"
-if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".list" set "ReplayInputFile=%ReplayListArg%"
+if not defined ReplayInputDirectory if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".txt" set "ReplayInputFile=%ReplayListArg%"
+if not defined ReplayInputDirectory if exist "%ReplayListArg%" if /I "%ReplayInputExt%"==".list" set "ReplayInputFile=%ReplayListArg%"
 
 echo [INFO] Replay input: "%ReplayListArg%"
 if defined ReplayInputFile echo [INFO] Replay input file: "%ReplayInputFile%"
 echo [INFO] Temp config dir: "%TempRoot%"
 echo.
 
-if defined ReplayInputFile (
+if defined ReplayInputDirectory (
+  echo [INFO] Replay input directory: "%ReplayInputDirectory%"
+  for /f "delims=" %%R in ('dir /b /s /a-d "!ReplayInputDirectory!\*.replay" 2^>nul ^| sort') do (
+    set /a Total+=1
+    call :RunOneReplay "%%R" !Total!
+    if errorlevel 1 set /a Failed+=1
+  )
+) else if defined ReplayInputFile (
   for /f "usebackq delims=" %%R in ("%ReplayInputFile%") do (
     set "ReplayLine=%%R"
     if not "!ReplayLine!"=="" if not "!ReplayLine:~0,1!"=="#" (
@@ -71,6 +80,12 @@ set "ReplayPath=%~1"
 set "ReplayIndex=%~2"
 for %%I in ("%ReplayPath%") do set "ReplayName=%%~nI"
 if not defined ReplayName set "ReplayName=Replay%ReplayIndex%"
+
+if not exist "!ReplayPath!" (
+  echo [ERROR] [!ReplayIndex!] Replay file not found: "!ReplayPath!"
+  echo FAIL [!ReplayIndex!] replay_not_found "!ReplayPath!" >> "!SummaryFile!"
+  exit /b 2
+)
 
 set "TempConfig=%TempRoot%\apt_%ReplayIndex%.config.cmd"
 copy /Y "%ConfigFile%" "%TempConfig%" >nul
