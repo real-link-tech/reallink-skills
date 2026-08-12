@@ -1,0 +1,3 @@
+# Keep Windows command scripts byte-for-byte CRLF in repository artifacts.
+*.bat -text whitespace=cr-at-eol
+*.cmd -text whitespace=cr-at-eol
