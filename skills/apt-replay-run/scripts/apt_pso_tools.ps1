@@ -90,7 +90,10 @@ function Assert-QualityControlsApplied {
 }
 
 function Assert-PSOControlsApplied {
-    param([string]$LogText)
+    param(
+        [string]$LogText,
+        [switch]$RequirePSOPrecachingDisabled
+    )
 
     $unsupportedPatterns = @(
         'Command not recognized: Reallink.ProfileMatrix.AddCustomizedCVar',
@@ -107,7 +110,7 @@ function Assert-PSOControlsApplied {
         Exit-Failure 12 'The packaged build rejected a required ProfileMatrix PSO override.'
     }
 
-    if ($LogText -notmatch '(?im)Priority:2147483647[^\r\n]*r\.PSOPrecaching=0') {
+    if ($RequirePSOPrecachingDisabled -and $LogText -notmatch '(?im)Priority:2147483647[^\r\n]*r\.PSOPrecaching=0') {
         Exit-Failure 13 'The log did not confirm the max-priority r.PSOPrecaching=0 override.'
     }
 }
@@ -157,7 +160,7 @@ switch ($Action) {
         }
 
         $identity = @(
-            'APT_PSO_WARMUP_V3'
+            'APT_PSO_WARMUP_V4'
             $BuildName
             $exe.FullName.ToLowerInvariant()
             $exe.Length
@@ -208,7 +211,7 @@ switch ($Action) {
 
     'ValidateCapture' {
         $logText = Read-RunLog
-        Assert-PSOControlsApplied -LogText $logText
+        Assert-PSOControlsApplied -LogText $logText -RequirePSOPrecachingDisabled
         Assert-QualityControlsApplied -LogText $logText
 
         $pauseMatches = [regex]::Matches(

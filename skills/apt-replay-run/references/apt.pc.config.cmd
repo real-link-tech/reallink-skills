@@ -52,7 +52,7 @@ set "PSOWarmupCacheRoot=%WorkRoot%\PSOWarmup"
 set "PSOWarmupRequireCompletion=true"
 set "PSOWarmupBatchSize=100"
 set "PSOWarmupBatchTime=200"
-set "PSOWarmupExecCmds=Reallink.ProfileMatrix.AddCustomizedCVar r.PSOPrecaching 0,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchMode 1,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchSize %PSOWarmupBatchSize%,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchTime %PSOWarmupBatchTime%,r.ShaderPipelineCache.SetBatchMode Fast"
+set "PSOWarmupExecCmds=Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchMode 1,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchSize %PSOWarmupBatchSize%,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchTime %PSOWarmupBatchTime%,r.ShaderPipelineCache.SetBatchMode Fast"
 set "PSOCaptureExecCmds=Reallink.ProfileMatrix.AddCustomizedCVar r.PSOPrecaching 0,r.ShaderPipelineCache.SetBatchMode Pause"
 
 rem GPUPerf settings applied by the direct PC runner.

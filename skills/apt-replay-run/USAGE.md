@@ -242,8 +242,8 @@ key 不包含 `ExecCmds` 和 `ExtraArgs`。如果它们会改变画质、材质�
 
 第一次运行或 key 变化时，一次命令会自动跑两遍 Replay：
 
-1. warmup：关闭 APT 正式采集器，关闭运行时 PSO Precache，让 bundled ShaderPipelineCache 以 Fast 模式完成已有任务。
-2. 正式采集：继续关闭运行时 PSO Precache，并把 ShaderPipelineCache 批处理切换到 `Pause`，避免后台编译干扰数据。
+1. warmup：关闭 APT 正式采集器，不覆盖运行时 PSO Precache，让 bundled ShaderPipelineCache 以 Fast 模式完成已有任务。
+2. 正式采集：关闭运行时 PSO Precache，并把 ShaderPipelineCache 批处理切换到 `Pause`，避免后台编译干扰数据。
 
 只有 warmup 进程成功退出、日志确认 PSO 队列完成且相关 CVar 生效，才会开始正式采集。失败时不会生成 warmup 完成标记，也不会继续正式跑分。
 

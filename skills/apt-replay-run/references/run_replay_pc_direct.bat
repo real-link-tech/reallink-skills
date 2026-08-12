@@ -64,7 +64,7 @@ if not defined PSOWarmupCacheRoot set "PSOWarmupCacheRoot=%WorkRoot%\PSOWarmup"
 if not defined PSOWarmupRequireCompletion set "PSOWarmupRequireCompletion=true"
 if not defined PSOWarmupBatchSize set "PSOWarmupBatchSize=100"
 if not defined PSOWarmupBatchTime set "PSOWarmupBatchTime=200"
-if not defined PSOWarmupExecCmds set "PSOWarmupExecCmds=Reallink.ProfileMatrix.AddCustomizedCVar r.PSOPrecaching 0,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchMode 1,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchSize %PSOWarmupBatchSize%,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchTime %PSOWarmupBatchTime%,r.ShaderPipelineCache.SetBatchMode Fast"
+if not defined PSOWarmupExecCmds set "PSOWarmupExecCmds=Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchMode 1,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchSize %PSOWarmupBatchSize%,Reallink.ProfileMatrix.AddCustomizedCVar r.ShaderPipelineCache.BatchTime %PSOWarmupBatchTime%,r.ShaderPipelineCache.SetBatchMode Fast"
 if not defined PSOCaptureExecCmds set "PSOCaptureExecCmds=Reallink.ProfileMatrix.AddCustomizedCVar r.PSOPrecaching 0,r.ShaderPipelineCache.SetBatchMode Pause"
 if not defined GPUPerfExecCmds set "GPUPerfExecCmds=r.StencilLODMode 1,r.VolumetricRenderTarget.PreferAsyncCompute 0,r.LumenScene.Lighting.AsyncCompute 0,r.Lumen.DiffuseIndirect.AsyncCompute 0,r.Bloom.AsyncCompute 0,r.nanite.asyncrasterization.shadowdepths 1,r.TSR.AsyncCompute 0,r.RayTracing.AsyncBuild 0,r.DFShadowAsyncCompute 0,r.AmbientOcclusion.Compute 1,r.LocalFogVolume.TileCullingUseAsync 0,r.SkyAtmosphereASyncCompute 0,r.Substrate.AsyncClassification 0"
 
@@ -526,11 +526,11 @@ exit /b 0
 :WritePSOCVarIni
 > "%~1" (
   echo [Startup]
-  echo r.PSOPrecaching=0
   if /I "%~2"=="Warmup" (
     echo r.ShaderPipelineCache.StartupMode=1
     echo r.ShaderPipelineCache.BatchMode=1
   ) else (
+    echo r.PSOPrecaching=0
     echo r.ShaderPipelineCache.StartupMode=0
   )
 )

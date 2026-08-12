@@ -107,12 +107,12 @@ Remote PC does not read `apt.pc.config.cmd`. Duplicate needed PC package fields 
 
 - Keep `PSOWarmupMode=Auto` in `apt.pc.config.cmd`. One user invocation may run an unmeasured warmup replay followed by the measured replay.
 - `Auto` warms once for each package/replay/map/GPU-driver/quality-override identity, `Always` warms every time, and `Never` skips warmup while retaining the capture-time PSO controls.
-- The warmup pass disables runtime `r.PSOPrecaching`, pins that value through `Reallink.ProfileMatrix.AddCustomizedCVar`, runs bundled ShaderPipelineCache work in Fast mode, and disables APT performance collectors.
+- The warmup pass does not override runtime `r.PSOPrecaching`, runs bundled ShaderPipelineCache work in Fast mode, and disables APT performance collectors.
 - Create the warmup stamp only after the game exits successfully and the log confirms that the bundled PSO queue completed. A failed or incomplete warmup must stop the measured pass.
-- The measured pass reuses the same `userdir`, keeps runtime PSO precaching pinned off, and calls `r.ShaderPipelineCache.SetBatchMode Pause` before profiling. Do not use `r.ShaderPipelineCache.Enabled=0`.
+- The measured pass reuses the same `userdir`, pins runtime PSO precaching off, and calls `r.ShaderPipelineCache.SetBatchMode Pause` before profiling. Do not use `r.ShaderPipelineCache.Enabled=0`.
 - Validate the measured log and fail the run if bundled PSO precompile resumes or advances during the profiling window.
 - This is a two-process Skill-level approximation. It warms driver/user caches and prevents background bundled compilation during measurement, but it cannot eliminate a genuinely missing first-draw PSO. Exact same-process queue gating requires controller support.
-- The packaged build must contain `Reallink.ProfileMatrix.AddCustomizedCVar`. Do not silently fall back to a one-shot `r.PSOPrecaching 0`, because later profile refreshes can restore it.
+- The measured pass requires a packaged build containing `Reallink.ProfileMatrix.AddCustomizedCVar`. Do not silently fall back to a one-shot `r.PSOPrecaching 0`, because later profile refreshes can restore it.
 
 ## Replay List
 
