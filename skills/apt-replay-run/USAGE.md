@@ -72,6 +72,11 @@ set "ReplayReadyTimeoutSeconds=60.0"
 set "ReplayReadyForceExitOnTimeout=true"
 set "ReplayReadyWatchdog=true"
 set "ReplayReadyWatchdogGraceSeconds=10.0"
+set "ReplayProgressWatchdog=true"
+set "ReplayProgressTimeoutSeconds=120.0"
+set "ReplayExitWatchdog=true"
+set "ReplayExitTimeoutSeconds=90.0"
+set "ReplayWatchdogCpuSampleSeconds=3.0"
 set "ReplayReadyPrimeFrames=1"
 ```
 
@@ -82,9 +87,15 @@ set "ReplayReadyPrimeFrames=1"
 3. 等待项目加载条件 `gq.Ind.Loading=0` 持续满足 `1` 秒。
 4. 条件稳定后恢复 Replay，并开始本次 profiling。
 
-等待超时采用双层保护：包体内部超过 `60` 秒会按失败退出；独立 watchdog 不依赖游戏线程，在额外等待 `10` 秒后如果仍未看到 profiling 开始且进程没有退出，就强制结束启动进程及其子进程，并让本次 APT 返回错误码 `124`。这样即使游戏线程卡住、内部退出没有执行完成，运行脚本也不会一直等待。
+等待和运行阶段采用独立生命周期 watchdog：
 
-`ReplayReadyWatchdog=false` 只关闭外部 watchdog，不会关闭包体内部的 Replay 就绪超时。PSO warmup 和正式采集进程都会使用同一套 Replay 就绪参数与 watchdog，相关的 `.log`、`.status` 文件会随报告一起保留。
+- 包体内部 Replay 就绪等待超过 `60` 秒会按失败退出；外部 watchdog 再宽限 `10` 秒，仍未开始 profiling 时强制结束进程树并返回 `124`。
+- profiling 开始后，只把新 Replay Chunk 或 Teardown 识别为有效进展。连续 `120` 秒没有进展时采样进程 CPU、响应状态、线程和内存，归档诊断后结束进程树并返回 `127`。
+- Teardown、请求退出或 PSO exit-flush 出现后切换到退出阶段，PSO 保存、上传和关机共用独立的 `90` 秒宽限；超时返回 `128`。
+
+因此周期性的 PSO、渲染或音频日志不会掩盖 Replay 停滞，正常 PSO 退出写入也不会被 Replay 进度计时误杀。
+
+`ReplayReadyWatchdog`、`ReplayProgressWatchdog` 和 `ReplayExitWatchdog` 可以分别关闭。`ReplayReadyWatchdog=false` 不会关闭包体内部的 Replay 就绪超时。PSO warmup 和正式采集进程都会使用同一套生命周期 watchdog，相关的 `.log`、`.status`、`.json` 和 `.tail.log` 文件会随报告一起保留。
 
 该功能只接入本地 PC 直启流程，并要求包体包含匹配版本的 `AutomatedReplayPerfTest` 就绪等待控制逻辑。旧包体可能忽略这些参数并沿用旧的采集起点。
 

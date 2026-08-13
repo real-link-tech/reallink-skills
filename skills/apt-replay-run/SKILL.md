@@ -98,9 +98,12 @@ Remote PC does not read `apt.pc.config.cmd`. Duplicate needed PC package fields 
 - `ReplayReadyCVar` is the project-specific final gate. For ProjectPBZ use `gq.Ind.Loading` with `ReplayReadyValue=0`.
 - Start profiling only after all ready conditions remain satisfied for `ReplayReadySettleSeconds`. Treat `ReplayReadyTimeoutSeconds` expiry as a failed run rather than collecting invalid loading data.
 - Keep `ReplayReadyForceExitOnTimeout=true` for unattended local PC runs. The controller then force-exits with code `1` as soon as the ready wait times out, so a blocked graceful shutdown cannot leave the package running indefinitely. Set it to `false` only when an engineer explicitly prefers the original graceful-exit path so profiling tools can attempt normal finalization.
-- Keep the independent `ReplayReadyWatchdog=true` for both the PSO warmup and measured local PC passes. It arms from the `Replay ready task installed.` log marker, disarms only after `Replay is ready. Profiling started`, and does not depend on the game thread continuing to tick.
-- The watchdog deadline is `ReplayReadyTimeoutSeconds + ReplayReadyWatchdogGraceSeconds`. If the launcher process is still running at that point, kill its Windows process tree and report exit code `124`. Preserve the watchdog `.log` and `.status` files with the normal APT logs.
-- Set `ReplayReadyWatchdog=false` only for an explicitly interactive debugging run. This disables the external fallback but does not disable the controller's own ready timeout.
+- Keep the independent lifecycle watchdog enabled for both the PSO warmup and measured local PC passes. `ReplayReadyWatchdog` covers readiness, `ReplayProgressWatchdog` covers replay progress after profiling starts, and `ReplayExitWatchdog` covers teardown/exit.
+- The ready deadline is `ReplayReadyTimeoutSeconds + ReplayReadyWatchdogGraceSeconds`; a ready timeout terminates the exact launcher process tree and reports exit code `124`.
+- During `REPLAY_ACTIVE`, refresh progress only for a new `FLocalFileNetworkReplayStreamer::ConditionallyLoadNextChunk. Index: N` marker or teardown. Do not treat generic game, audio, rendering, or periodic PSO output as replay progress. If no progress is observed for `ReplayProgressTimeoutSeconds`, sample process responsiveness and CPU, archive a structured diagnostic, terminate the process tree, and report exit code `127`.
+- After `TeardownTest`, `completed, requesting exit`, or the PSO exit-flush marker, switch to `EXITING` and allow `ReplayExitTimeoutSeconds` for PSO save/upload and shutdown. Report exit code `128` only when that exit grace expires.
+- Preserve `ReplayWatchdog.log`, `ReplayWatchdog.status`, `ReplayWatchdog.json`, and `ReplayWatchdog.tail.log` with the normal APT logs. A watchdog failure must be reported as a watchdog failure and must skip PSO validation/stamp creation.
+- Disable an individual watchdog only for an explicitly interactive diagnostic run. Disabling `ReplayReadyWatchdog` does not disable the controller's own ready timeout.
 - Keep project-specific CVar names in the Skill config; do not hard-code them into the engine controller.
 
 ### Local PC PSO Policy

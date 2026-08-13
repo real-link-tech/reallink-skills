@@ -58,6 +58,11 @@ if not defined ReplayReadyWatchdog set "ReplayReadyWatchdog=true"
 if not defined ReplayReadyWatchdogGraceSeconds set "ReplayReadyWatchdogGraceSeconds=10.0"
 if not defined ReplayReadyWatchdogPollMilliseconds set "ReplayReadyWatchdogPollMilliseconds=500"
 if not defined ReplayReadyWatchdogProcessStartTimeoutSeconds set "ReplayReadyWatchdogProcessStartTimeoutSeconds=30.0"
+if not defined ReplayProgressWatchdog set "ReplayProgressWatchdog=true"
+if not defined ReplayProgressTimeoutSeconds set "ReplayProgressTimeoutSeconds=120.0"
+if not defined ReplayExitWatchdog set "ReplayExitWatchdog=true"
+if not defined ReplayExitTimeoutSeconds set "ReplayExitTimeoutSeconds=90.0"
+if not defined ReplayWatchdogCpuSampleSeconds set "ReplayWatchdogCpuSampleSeconds=3.0"
 if not defined ReplayReadyPrimeFrames set "ReplayReadyPrimeFrames=1"
 if not defined PSOWarmupMode set "PSOWarmupMode=Auto"
 if not defined PSOWarmupCacheRoot set "PSOWarmupCacheRoot=%WorkRoot%\PSOWarmup"
@@ -146,8 +151,27 @@ if defined ReplayReadyArgs (
 set "ReplayReadyWatchdogEnabled=false"
 if defined ReplayReadyArgs if /I "!ReplayReadyWatchdog!"=="true" set "ReplayReadyWatchdogEnabled=true"
 if defined ReplayReadyArgs if "!ReplayReadyWatchdog!"=="1" set "ReplayReadyWatchdogEnabled=true"
-if /I "!ReplayReadyWatchdogEnabled!"=="true" if not exist "!ReplayWatchdogScript!" (
-  echo [ERROR] Replay ready watchdog script not found: "!ReplayWatchdogScript!"
+
+set "ReplayProgressWatchdogEnabled=false"
+if /I "!ReplayProgressWatchdog!"=="true" set "ReplayProgressWatchdogEnabled=true"
+if "!ReplayProgressWatchdog!"=="1" set "ReplayProgressWatchdogEnabled=true"
+
+set "ReplayExitWatchdogEnabled=false"
+if /I "!ReplayExitWatchdog!"=="true" set "ReplayExitWatchdogEnabled=true"
+if "!ReplayExitWatchdog!"=="1" set "ReplayExitWatchdogEnabled=true"
+
+set "ReplayWatchdogEnabled=false"
+if /I "!ReplayReadyWatchdogEnabled!"=="true" set "ReplayWatchdogEnabled=true"
+if /I "!ReplayProgressWatchdogEnabled!"=="true" set "ReplayWatchdogEnabled=true"
+if /I "!ReplayExitWatchdogEnabled!"=="true" set "ReplayWatchdogEnabled=true"
+
+set "ReplayWatchdogSwitches="
+if /I not "!ReplayReadyWatchdogEnabled!"=="true" set "ReplayWatchdogSwitches=!ReplayWatchdogSwitches! -DisableReadyWatchdog"
+if /I not "!ReplayProgressWatchdogEnabled!"=="true" set "ReplayWatchdogSwitches=!ReplayWatchdogSwitches! -DisableReplayProgressWatchdog"
+if /I not "!ReplayExitWatchdogEnabled!"=="true" set "ReplayWatchdogSwitches=!ReplayWatchdogSwitches! -DisableExitWatchdog"
+
+if /I "!ReplayWatchdogEnabled!"=="true" if not exist "!ReplayWatchdogScript!" (
+  echo [ERROR] Replay lifecycle watchdog script not found: "!ReplayWatchdogScript!"
   endlocal & exit /b 2
 )
 
@@ -181,7 +205,7 @@ echo [INFO] MapPath="%MapPath%"
 echo [INFO] WindowMode="%WindowMode%"
 echo [INFO] APT Do args:%AptDoArgs%
 echo [INFO] Replay ready args:%ReplayReadyArgs%
-echo [INFO] Replay ready watchdog=!ReplayReadyWatchdogEnabled! grace=!ReplayReadyWatchdogGraceSeconds!s
+echo [INFO] Replay watchdog ready=!ReplayReadyWatchdogEnabled! progress=!ReplayProgressWatchdogEnabled! progress_timeout=!ReplayProgressTimeoutSeconds!s exit=!ReplayExitWatchdogEnabled! exit_timeout=!ReplayExitTimeoutSeconds!s
 echo [INFO] PSO warmup mode=%PSOWarmupModeNormalized% cache="%PSOWarmupCacheRoot%"
 echo [INFO] ExtraArgs="%ExtraArgs%"
 if defined QualityCVars (echo [INFO] Quality overrides="!QualityCVars!") else echo [INFO] Quality overrides=default
@@ -267,6 +291,10 @@ set "ProfilingDir=%PCSourceProfiling%"
 set "LogDir=%UserDir%\Saved\Logs"
 set "ArchiveTarget=%ArchiveRoot%\%PCBuildName%_%ArchiveDate%_%ReplayName%"
 set "PSOWarmupKey="
+set "PSO_WARMUP_WATCHDOG_RESULT="
+set "PSO_WARMUP_WATCHDOG_FAILURE="
+set "CAPTURE_WATCHDOG_RESULT="
+set "CAPTURE_WATCHDOG_FAILURE="
 
 for /f "usebackq delims=" %%K in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%PSOTools%" -Action Key -ExePath "%PCExe%" -ReplayPath "!ReplayPath!" -BuildName "%PCBuildName%" -MapPath "%MapPath%" -QualityCVars "!QualityCVars!"`) do set "PSOWarmupKey=%%K"
 if not defined PSOWarmupKey (
@@ -312,8 +340,13 @@ if /I "!RunPSOWarmup!"=="true" (
   call :RunPSOWarmup
   set "PSO_WARMUP_RC=!ERRORLEVEL!"
   if not "!PSO_WARMUP_RC!"=="0" (
-    echo FAIL [!ReplayIndex!] pso_warmup_rc=!PSO_WARMUP_RC! "!ReplayPath!" >> "!SummaryFile!"
-    echo [ERROR] [!ReplayIndex!] PSO warmup failed rc=!PSO_WARMUP_RC!
+    if defined PSO_WARMUP_WATCHDOG_FAILURE (
+      echo FAIL [!ReplayIndex!] !PSO_WARMUP_WATCHDOG_FAILURE! "!ReplayPath!" >> "!SummaryFile!"
+      echo [ERROR] [!ReplayIndex!] Replay lifecycle watchdog failed during PSO warmup: !PSO_WARMUP_WATCHDOG_FAILURE!
+    ) else (
+      echo FAIL [!ReplayIndex!] pso_warmup_rc=!PSO_WARMUP_RC! "!ReplayPath!" >> "!SummaryFile!"
+      echo [ERROR] [!ReplayIndex!] PSO warmup failed rc=!PSO_WARMUP_RC!
+    )
     exit /b !PSO_WARMUP_RC!
   )
 ) else (
@@ -340,8 +373,13 @@ if exist "!LogDir!" (
 )
 
 if not "!RUN_EXIT!"=="0" (
-  echo FAIL [!ReplayIndex!] rc=!RUN_EXIT! "!ReplayPath!" >> "!SummaryFile!"
-  echo [ERROR] [!ReplayIndex!] FAIL rc=!RUN_EXIT!
+  if defined CAPTURE_WATCHDOG_FAILURE (
+    echo FAIL [!ReplayIndex!] !CAPTURE_WATCHDOG_FAILURE! "!ReplayPath!" >> "!SummaryFile!"
+    echo [ERROR] [!ReplayIndex!] FAIL !CAPTURE_WATCHDOG_FAILURE!
+  ) else (
+    echo FAIL [!ReplayIndex!] rc=!RUN_EXIT! "!ReplayPath!" >> "!SummaryFile!"
+    echo [ERROR] [!ReplayIndex!] FAIL rc=!RUN_EXIT!
+  )
   exit /b !RUN_EXIT!
 )
 if !ROBO_PROFILE! GEQ 8 (
@@ -367,7 +405,9 @@ call :WritePSOCVarIni "!PSOWarmupCVarIni!" Warmup
 set "PSOWarmupWatchdogStatus=!PSOWarmupLog!.watchdog.status"
 set "PSOWarmupWatchdogStop=!PSOWarmupLog!.watchdog.stop"
 set "PSOWarmupWatchdogLog=!PSOWarmupLog!.watchdog.log"
-call :StartReplayReadyWatchdog "%PCExe%" "!PSOWarmupLog!" "!PSOWarmupWatchdogStatus!" "!PSOWarmupWatchdogStop!" "!PSOWarmupWatchdogLog!"
+set "PSOWarmupWatchdogDiagnostic=!PSOWarmupLog!.watchdog.json"
+set "PSOWarmupWatchdogTail=!PSOWarmupLog!.watchdog.tail.log"
+call :StartReplayLifecycleWatchdog "%PCExe%" "!PSOWarmupLog!" "!PSOWarmupWatchdogStatus!" "!PSOWarmupWatchdogStop!" "!PSOWarmupWatchdogLog!" "!PSOWarmupWatchdogDiagnostic!"
 
 pushd "%PCExeDir%" >nul
 call "%PCExe%" "%MapPath%" ^
@@ -392,13 +432,15 @@ call "%PCExe%" "%MapPath%" ^
   %ExtraArgs%
 set "PSO_WARMUP_EXIT=!ERRORLEVEL!"
 popd >nul
-call :FinalizeReplayReadyWatchdog "!PSOWarmupWatchdogStatus!" "!PSOWarmupWatchdogStop!" PSO_WARMUP_EXIT
+call :FinalizeReplayLifecycleWatchdog "!PSOWarmupWatchdogStatus!" "!PSOWarmupWatchdogStop!" PSO_WARMUP_EXIT PSO_WARMUP_WATCHDOG_RESULT PSO_WARMUP_WATCHDOG_FAILURE
 del /q "!PSOWarmupCVarIni!" >nul 2>&1
 
 mkdir "!ArchiveTarget!\warmup_logs" >nul 2>&1
 if exist "!PSOWarmupLog!" copy /y "!PSOWarmupLog!" "!ArchiveTarget!\warmup_logs\ProjectPBZ-PSOWarmup.log" >nul
-if exist "!PSOWarmupWatchdogLog!" copy /y "!PSOWarmupWatchdogLog!" "!ArchiveTarget!\warmup_logs\ReplayReadyWatchdog.log" >nul
-if exist "!PSOWarmupWatchdogStatus!" copy /y "!PSOWarmupWatchdogStatus!" "!ArchiveTarget!\warmup_logs\ReplayReadyWatchdog.status" >nul
+if exist "!PSOWarmupWatchdogLog!" copy /y "!PSOWarmupWatchdogLog!" "!ArchiveTarget!\warmup_logs\ReplayWatchdog.log" >nul
+if exist "!PSOWarmupWatchdogStatus!" copy /y "!PSOWarmupWatchdogStatus!" "!ArchiveTarget!\warmup_logs\ReplayWatchdog.status" >nul
+if exist "!PSOWarmupWatchdogDiagnostic!" copy /y "!PSOWarmupWatchdogDiagnostic!" "!ArchiveTarget!\warmup_logs\ReplayWatchdog.json" >nul
+if exist "!PSOWarmupWatchdogTail!" copy /y "!PSOWarmupWatchdogTail!" "!ArchiveTarget!\warmup_logs\ReplayWatchdog.tail.log" >nul
 
 if not "!PSO_WARMUP_EXIT!"=="0" exit /b !PSO_WARMUP_EXIT!
 
@@ -437,10 +479,11 @@ if /I "!GPUReshapeEnabled!"=="true" (
 )
 
 set "CaptureLogPath=!LogDir!\ProjectPBZ.log"
-set "CaptureWatchdogStatus=!LogDir!\ReplayReadyWatchdog.status"
-set "CaptureWatchdogStop=!LogDir!\ReplayReadyWatchdog.stop"
-set "CaptureWatchdogLog=!LogDir!\ReplayReadyWatchdog.log"
-call :StartReplayReadyWatchdog "!LaunchExe!" "!CaptureLogPath!" "!CaptureWatchdogStatus!" "!CaptureWatchdogStop!" "!CaptureWatchdogLog!"
+set "CaptureWatchdogStatus=!LogDir!\ReplayWatchdog.status"
+set "CaptureWatchdogStop=!LogDir!\ReplayWatchdog.stop"
+set "CaptureWatchdogLog=!LogDir!\ReplayWatchdog.log"
+set "CaptureWatchdogDiagnostic=!LogDir!\ReplayWatchdog.json"
+call :StartReplayLifecycleWatchdog "!LaunchExe!" "!CaptureLogPath!" "!CaptureWatchdogStatus!" "!CaptureWatchdogStop!" "!CaptureWatchdogLog!" "!CaptureWatchdogDiagnostic!"
 
 pushd "%PCExeDir%" >nul
 call "!LaunchExe!" !LaunchPrefixArgs! "%MapPath%" ^
@@ -467,7 +510,7 @@ call "!LaunchExe!" !LaunchPrefixArgs! "%MapPath%" ^
   %ExtraArgs%
 set "CAPTURE_EXIT=!ERRORLEVEL!"
 popd >nul
-call :FinalizeReplayReadyWatchdog "!CaptureWatchdogStatus!" "!CaptureWatchdogStop!" CAPTURE_EXIT
+call :FinalizeReplayLifecycleWatchdog "!CaptureWatchdogStatus!" "!CaptureWatchdogStop!" CAPTURE_EXIT CAPTURE_WATCHDOG_RESULT CAPTURE_WATCHDOG_FAILURE
 del /q "!PSOCaptureCVarIni!" >nul 2>&1
 
 if /I "!GPUReshapeEnabled!"=="true" if "!CAPTURE_EXIT!"=="0" if not exist "!GPUReshapeReport!" (
@@ -484,14 +527,15 @@ if "!CAPTURE_EXIT!"=="0" (
 echo [INFO] [!ReplayIndex!] Game exit code: !CAPTURE_EXIT!
 exit /b !CAPTURE_EXIT!
 
-:StartReplayReadyWatchdog
-if /I not "!ReplayReadyWatchdogEnabled!"=="true" exit /b 0
+:StartReplayLifecycleWatchdog
+if /I not "!ReplayWatchdogEnabled!"=="true" exit /b 0
 set "WatchdogProcessPath=%~1"
 set "WatchdogRuntimeLogPath=%~2"
 set "WatchdogStatusPath=%~3"
 set "WatchdogStopPath=%~4"
 set "WatchdogLogPath=%~5"
-del /q "!WatchdogStatusPath!" "!WatchdogStopPath!" "!WatchdogLogPath!" >nul 2>&1
+set "WatchdogDiagnosticPath=%~6"
+del /q "!WatchdogStatusPath!" "!WatchdogStopPath!" "!WatchdogLogPath!" "!WatchdogDiagnosticPath!" >nul 2>&1
 start "" /b "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" ^
   -NoProfile ^
   -NonInteractive ^
@@ -503,33 +547,70 @@ start "" /b "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" ^
   -StatusPath "!WatchdogStatusPath!" ^
   -StopPath "!WatchdogStopPath!" ^
   -WatchdogLogPath "!WatchdogLogPath!" ^
+  -DiagnosticPath "!WatchdogDiagnosticPath!" ^
   -ReadyTimeoutSeconds !ReplayReadyTimeoutSeconds! ^
   -GraceSeconds !ReplayReadyWatchdogGraceSeconds! ^
+  -ReplayProgressTimeoutSeconds !ReplayProgressTimeoutSeconds! ^
+  -ExitTimeoutSeconds !ReplayExitTimeoutSeconds! ^
+  -CpuSampleSeconds !ReplayWatchdogCpuSampleSeconds! ^
   -PollMilliseconds !ReplayReadyWatchdogPollMilliseconds! ^
-  -ProcessStartTimeoutSeconds !ReplayReadyWatchdogProcessStartTimeoutSeconds! >nul 2>&1
-if errorlevel 1 echo [WARN] Failed to start replay ready watchdog.
+  -ProcessStartTimeoutSeconds !ReplayReadyWatchdogProcessStartTimeoutSeconds! ^
+  !ReplayWatchdogSwitches! >nul 2>&1
+if errorlevel 1 echo [WARN] Failed to start replay lifecycle watchdog.
 exit /b 0
 
-:FinalizeReplayReadyWatchdog
-if /I not "!ReplayReadyWatchdogEnabled!"=="true" exit /b 0
+:FinalizeReplayLifecycleWatchdog
+if /I not "!ReplayWatchdogEnabled!"=="true" exit /b 0
 set "WatchdogStatusPath=%~1"
 set "WatchdogStopPath=%~2"
 set "WatchdogExitVariable=%~3"
+set "WatchdogResultVariable=%~4"
+set "WatchdogFailureVariable=%~5"
 if not exist "!WatchdogStatusPath!" (
   > "!WatchdogStopPath!" echo stop
-  ping 127.0.0.1 -n 2 -w 1000 >nul
+  for /L %%W in (1,1,10) do (
+    if not exist "!WatchdogStatusPath!" ping 127.0.0.1 -n 2 -w 1000 >nul
+  )
 )
 if not exist "!WatchdogStatusPath!" (
-  echo [WARN] Replay ready watchdog did not produce a status file.
+  echo [WARN] Replay lifecycle watchdog did not produce a status file.
   exit /b 0
 )
+set "WatchdogStatusLine="
 set "WatchdogResult="
-set /p "WatchdogResult="<"!WatchdogStatusPath!"
-echo [INFO] Replay ready watchdog result: !WatchdogResult!
-if /I "!WatchdogResult!"=="KILLED" set "!WatchdogExitVariable!=124"
-if /I "!WatchdogResult!"=="KILL_FAILED" set "!WatchdogExitVariable!=125"
-if /I "!WatchdogResult!"=="ERROR" set "!WatchdogExitVariable!=126"
-if /I "!WatchdogResult!"=="PROCESS_NOT_FOUND" set "!WatchdogExitVariable!=126"
+set "WatchdogDetail="
+set /p "WatchdogStatusLine="<"!WatchdogStatusPath!"
+for /f "tokens=1,*" %%A in ("!WatchdogStatusLine!") do (
+  set "WatchdogResult=%%A"
+  set "WatchdogDetail=%%B"
+)
+if defined WatchdogResultVariable set "!WatchdogResultVariable!=!WatchdogResult!"
+if defined WatchdogFailureVariable set "!WatchdogFailureVariable!="
+echo [INFO] Replay lifecycle watchdog result: !WatchdogStatusLine!
+set "WatchdogMappedExit="
+if /I "!WatchdogResult!"=="READY_TIMEOUT" set "WatchdogMappedExit=124"
+if /I "!WatchdogResult!"=="REPLAY_STALLED_BUSY" set "WatchdogMappedExit=127"
+if /I "!WatchdogResult!"=="REPLAY_STALLED_IDLE" set "WatchdogMappedExit=127"
+if /I "!WatchdogResult!"=="PROCESS_HUNG" set "WatchdogMappedExit=127"
+if /I "!WatchdogResult!"=="EXIT_STALLED" set "WatchdogMappedExit=128"
+if /I "!WatchdogResult!"=="READY_TIMEOUT_KILL_FAILED" set "WatchdogMappedExit=125"
+if /I "!WatchdogResult!"=="REPLAY_STALLED_BUSY_KILL_FAILED" set "WatchdogMappedExit=125"
+if /I "!WatchdogResult!"=="REPLAY_STALLED_IDLE_KILL_FAILED" set "WatchdogMappedExit=125"
+if /I "!WatchdogResult!"=="PROCESS_HUNG_KILL_FAILED" set "WatchdogMappedExit=125"
+if /I "!WatchdogResult!"=="EXIT_STALLED_KILL_FAILED" set "WatchdogMappedExit=125"
+if /I "!WatchdogResult!"=="TARGET_PROCESS_CHANGED" set "WatchdogMappedExit=126"
+if /I "!WatchdogResult!"=="ERROR" set "WatchdogMappedExit=126"
+if /I "!WatchdogResult!"=="PROCESS_NOT_FOUND" set "WatchdogMappedExit=126"
+if defined WatchdogMappedExit (
+  set "!WatchdogExitVariable!=!WatchdogMappedExit!"
+  if defined WatchdogFailureVariable (
+    if defined WatchdogDetail (
+      set "!WatchdogFailureVariable!=watchdog=!WatchdogResult! !WatchdogDetail! rc=!WatchdogMappedExit!"
+    ) else (
+      set "!WatchdogFailureVariable!=watchdog=!WatchdogResult! rc=!WatchdogMappedExit!"
+    )
+  )
+)
 exit /b 0
 
 :WritePSOCVarIni

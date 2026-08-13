@@ -113,13 +113,24 @@ set "ReplayReadyTimeoutSeconds=60.0"
 set "ReplayReadyForceExitOnTimeout=true"
 set "ReplayReadyWatchdog=true"
 set "ReplayReadyWatchdogGraceSeconds=10.0"
+set "ReplayProgressWatchdog=true"
+set "ReplayProgressTimeoutSeconds=120.0"
+set "ReplayExitWatchdog=true"
+set "ReplayExitTimeoutSeconds=90.0"
+set "ReplayWatchdogCpuSampleSeconds=3.0"
 ```
 
 Replay 建立目标世界后会暂停回放，保持世界 Tick，等地图、World Partition、资源流送以及 `gq.Ind.Loading=0` 稳定后才开始采集。
 
-包体内部等待超过 `60` 秒会先按失败退出。独立 watchdog 会读取运行日志并单独计时；再宽限 `10` 秒后，如果仍未看到 profiling 开始且启动进程没有退出，就强制结束该进程树，并把本次运行标记为错误码 `124`。warmup 和正式采集都会启用该保护，watchdog 的 `.log` 与 `.status` 会一同归档。
+包体内部等待超过 `60` 秒会先按失败退出。独立生命周期 watchdog 会读取运行日志并分阶段计时：
 
-`ReplayReadyWatchdog=false` 只关闭外部保护，不会关闭包体内部的 Replay 就绪超时。仅在需要交互调试时临时关闭。
+- Replay 就绪超时再宽限 `10` 秒，仍未开始 profiling 时结束进程树，返回 `124`。
+- profiling 开始后，只有新的 Replay Chunk 或 Teardown 才算有效进展；连续 `120` 秒无进展时采样 CPU/响应状态、归档诊断并结束进程树，返回 `127`。
+- Teardown 或请求退出后切换到退出阶段，给 PSO 保存、上传和正常退出 `90` 秒；只有退出阶段超时才返回 `128`。
+
+warmup 和正式采集都会启用该保护。报告会保留 `ReplayWatchdog.log`、`.status`、`.json` 和 `.tail.log`。Replay 阶段被 watchdog 终止时不会继续执行 PSO 校验，也不会创建 warmup stamp。
+
+`ReplayReadyWatchdog`、`ReplayProgressWatchdog` 和 `ReplayExitWatchdog` 可以分别关闭。`ReplayReadyWatchdog=false` 只关闭外部就绪保护，不会关闭包体内部的 Replay 就绪超时。仅在需要交互调试时临时关闭。
 
 ## 常见问题
 

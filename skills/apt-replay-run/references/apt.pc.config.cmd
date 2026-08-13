@@ -41,6 +41,11 @@ set "ReplayReadyTimeoutSeconds=60.0"
 set "ReplayReadyForceExitOnTimeout=true"
 set "ReplayReadyWatchdog=true"
 set "ReplayReadyWatchdogGraceSeconds=10.0"
+set "ReplayProgressWatchdog=true"
+set "ReplayProgressTimeoutSeconds=120.0"
+set "ReplayExitWatchdog=true"
+set "ReplayExitTimeoutSeconds=90.0"
+set "ReplayWatchdogCpuSampleSeconds=3.0"
 set "ReplayReadyPrimeFrames=1"
 
 rem PSO policy for local replay runs. Auto warms once per build/replay/GPU-driver key.
